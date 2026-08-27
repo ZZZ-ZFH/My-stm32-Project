@@ -1,0 +1,54 @@
+# ===== 个人资料/文档（不上传） =====
+开发流程.txt
+模块资料/
+
+# ===== Keil MDK 编译中间文件 =====
+# 编译输出目录（整个目录忽略）
+Objects/
+Listings/
+output/
+DebugConfig/
+RTE/
+
+# 目标文件与依赖文件
+*.o
+*.d
+*.crf
+*.lst
+*.lnp
+*.dep
+*.iex
+*.axf
+*.elf
+*.lib
+*.lnt
+
+# 链接/输出报告
+*.map
+*.htm
+*.build_log.htm
+
+# 固件产物（按需保留其一可注释掉）
+*.hex
+*.bin
+
+# ===== Keil 用户级/环境文件 =====
+# 不同用户/电脑生成的界面布局文件
+*.uvguix.*
+# 备份文件
+*.bak
+Backup of */
+# 事件跟踪
+*.scvd
+
+# ===== JLink 调试文件 =====
+JLinkLog.txt
+JLinkSettings.ini
+*.jlink
+
+# ===== 编辑器/系统杂项 =====
+.vscode/
+*.log
+*.log.lock
+Thumbs.db
+Desktop.ini
