@@ -338,7 +338,7 @@
               <MiscControls></MiscControls>
               <Define>USE_STDPERIPH_DRIVER,STM32F40_41xxx,LV_LVGL_H_INCLUDE_SIMPLE</Define>
               <Undefine></Undefine>
-              <IncludePath>..\USER;..\CORE;..\FWLIB\inc;..\FreeRTOS\include;..\FreeRTOS\portable\RVDS\ARM_CM4F;..\LVGL;..\LVGL\src;..\LVGL\examples\porting;..\LVGL\demos\widgets;..\HAL\inc</IncludePath>
+              <IncludePath>..\USER;..\CORE;..\FWLIB\inc;..\FreeRTOS\include;..\FreeRTOS\portable\RVDS\ARM_CM4F;..\LVGL;..\LVGL\src;..\LVGL\examples\porting;..\HAL\inc;..\APP\inc;..\HAL\inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -503,6 +503,11 @@
           <GroupName>HAL</GroupName>
           <Files>
             <File>
+              <FileName>algorithm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\HAL\src\algorithm.c</FilePath>
+            </File>
+            <File>
               <FileName>beep.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\HAL\src\beep.c</FilePath>
@@ -526,6 +531,11 @@
               <FileName>led.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\HAL\src\led.c</FilePath>
+            </File>
+            <File>
+              <FileName>max30102.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\HAL\src\max30102.c</FilePath>
             </File>
             <File>
               <FileName>protocol.c</FileName>
@@ -1658,32 +1668,29 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>LVGL_DEMO_WIDGETS</GroupName>
+          <GroupName>APP</GroupName>
           <Files>
             <File>
-              <FileName>lv_demo_widgets.c</FileName>
+              <FileName>app_task.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\LVGL\demos\widgets\lv_demo_widgets.c</FilePath>
+              <FilePath>..\APP\src\app_task.c</FilePath>
             </File>
             <File>
-              <FileName>img_clothes.c</FileName>
+              <FileName>app_ui.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\LVGL\demos\widgets\assets\img_clothes.c</FilePath>
-            </File>
-            <File>
-              <FileName>img_demo_widgets_avatar.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\LVGL\demos\widgets\assets\img_demo_widgets_avatar.c</FilePath>
-            </File>
-            <File>
-              <FileName>img_lvgl_logo.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\LVGL\demos\widgets\assets\img_lvgl_logo.c</FilePath>
+              <FilePath>..\APP\src\app_ui.c</FilePath>
             </File>
           </Files>
         </Group>
         <Group>
-          <GroupName>LVGL_DEMO_UI</GroupName>
+          <GroupName>LVGL_IMAGE</GroupName>
+          <Files>
+            <File>
+              <FileName>bluetooth-line.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\bluetooth-line.c</FilePath>
+            </File>
+          </Files>
         </Group>
       </Groups>
     </Target>

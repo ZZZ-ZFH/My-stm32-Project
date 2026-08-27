@@ -1,5 +1,10 @@
-﻿#include "uart1.h"
+#include "uart1.h"
 #include "stdio.h"
+
+/* USART1 接收缓冲(中断写入, protocol.c 解析) */
+uint8_t rx_buf[MAX_FRAME_LEN] = {0};
+u16     rx_index = 0;
+uint8_t rx_flag = 0;
 
 
 #pragma import(__use_no_semihosting)             
