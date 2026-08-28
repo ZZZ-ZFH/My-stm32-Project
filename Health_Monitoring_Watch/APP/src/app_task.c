@@ -5,6 +5,7 @@
  *          user_task1: LVGL 界面任务
  *          max30102_task: 心率血氧采集任务(纯中断驱动, 无轮询)
  *          dx24_task: 蓝牙接收任务(USART6空闲中断唤醒, 串口打印)
+ *          icm20602_task: IMU算法任务(Middleware姿态解算+计步, 桥接HAL采集)
  */
 #include "app_task.h"
 
@@ -23,17 +24,21 @@
 #include "uart1.h"
 #include "max30102.h"
 #include "dx24.h"
+#include "imu_algo.h"
+#include "st7789.h"
 
 /* 任务句柄(创建后仅调试器线程感知使用, 不对外暴露) */
 static TaskHandle_t app_task1_handle     = NULL;
 static TaskHandle_t user_task1_handle     = NULL;
 static TaskHandle_t max30102_task_handle = NULL;
 static TaskHandle_t dx24_task_handle     = NULL;
+static TaskHandle_t icm20602_task_handle  = NULL;
 
 static void app_task1(void* pvParameters);
 static void user_task1(void* pvParameters);
 static void max30102_task(void* pvParameters);
 static void dx24_task(void* pvParameters);
+static void icm20602_task(void* pvParameters);
 
 void APP_Task_Init(void)
 {
@@ -61,7 +66,7 @@ static void app_task1(void* pvParameters)
 			  (UBaseType_t   )4,
 			  (TaskHandle_t*  )&user_task1_handle);
 
-	// 创建max30102_task任务  心率血氧传感器(软件I2C PC8=SDA PC9=SCL PC11=INT)
+	// 创建max30102_task任务  心率血氧传感器(软件I2C PC8=SDA PC9=SCL PA15=INT)
 	xTaskCreate((TaskFunction_t )max30102_task,
 			  (const char*    )"max30102",
 			  (uint16_t       )512,
@@ -76,6 +81,14 @@ static void app_task1(void* pvParameters)
 			  (void*          )NULL,
 			  (UBaseType_t   )2,
 			  (TaskHandle_t*  )&dx24_task_handle);
+
+	// 创建icm20602_task任务  六轴传感器(软件I2C PB0=SCL PC13=SDA)
+	xTaskCreate((TaskFunction_t )icm20602_task,
+			  (const char*    )"icm20602",
+			  (uint16_t       )512,
+			  (void*          )NULL,
+			  (UBaseType_t   )1,
+			  (TaskHandle_t*  )&icm20602_task_handle);
 
     while(1)
     {
@@ -103,8 +116,9 @@ static void user_task1(void* pvParameters)
 	}
 }
 
-// MAX30102 心率血氧任务: INT(PC7)FIFO将满唤醒, 采样缓冲在驱动
-// 内部(静态分配), 每满500样本(5秒)计算一次心率/血氧并打印到串口
+// MAX30102 心率血氧任务: INT(PA15)FIFO将满唤醒+100ms兜底,
+// 采样缓冲在驱动内部(静态分配), 每满500样本(5秒)计算一次,
+// 内置接触检测(IR直流阈值)与生理范围过滤, 无手指时valid=0
 static void max30102_task(void* pvParameters)
 {
 	max30102_result_t result;
@@ -114,15 +128,16 @@ static void max30102_task(void* pvParameters)
 
 	if (MAX30102_Init() == 0)
 	{
-		printf("MAX30102 init failed! Check PC8=SDA PC9=SCL PC11=INT\r\n");
+		printf("MAX30102 init failed! Check PC8=SDA PC9=SCL PA15=INT\r\n");
 		vTaskDelete(NULL);   // 删除自身
 	}
 	printf("MAX30102 init OK\r\n");
 
 	while(1)
 	{
-		/* 纯中断驱动: 无INT事件时永久阻塞, 不轮询总线 */
-		MAX30102_WaitSampleEvent(0);
+		/* 中断唤醒为主, 100ms超时兜底: 覆盖100sps采样不溢出FIFO32,
+		 * 且INT电平不稳(模块上拉1.8V)时保证数据不丢 */
+		MAX30102_WaitSampleEvent(100);
 
 		if (MAX30102_Process(&result) == 1)
 		{
@@ -131,9 +146,9 @@ static void max30102_task(void* pvParameters)
 			       (int)result.spo2, (int)result.spo2_valid);
 
 			/* 推送到应用层UI(线程安全: 内部仅写共享变量) */
-		APP_UI_SetHealthData(result.heart_rate, result.hr_valid,
-		                     result.spo2, result.spo2_valid);
-	}
+			APP_UI_SetHealthData(result.heart_rate, result.hr_valid,
+								 result.spo2, result.spo2_valid);
+		}
 	}
 }
 
@@ -187,5 +202,58 @@ static void dx24_task(void* pvParameters)
 				}
 			}
 		}
+	}
+}
+
+// IMU算法任务: Middleware层姿态解算+计步+抬手检测, 50ms周期(桥接HAL采集)
+// 抬手亮屏: 检测到抬手手势->背光开, 10秒无抬手->背光关
+// (软件I2C PB0=SCL PC13=SDA, 初始化含陀螺零偏校准需静止约2秒)
+#define WRIST_SCREEN_TIMEOUT_MS   10000u      /* 亮屏持续时间 */
+
+static void icm20602_task(void* pvParameters)
+{
+	imu_result_t result;
+	uint8_t  screen_on   = 1;                 /* 开机默认亮屏 */
+	uint32_t screen_ms   = 0;                 /* 上次亮屏/交互时刻 */
+
+	if (IMU_Alg_Init() == 0)
+	{
+		printf("IMU algo init failed! Check PB0=SCL PC13=SDA\r\n");
+		vTaskDelete(NULL);   // 删除自身
+	}
+	printf("IMU algo init OK\r\n");
+
+	while(1)
+	{
+		IMU_Alg_Process(50);   // 50ms采样周期(20Hz), 与vTaskDelay一致
+		IMU_Alg_GetResult(&result);
+
+		/* 抬手手势 -> 亮屏(事件型, 仅一帧有效) */
+		if (result.wrist_raise)
+		{
+			if (!screen_on)
+			{
+				ST7789_Set_Backlight(100);
+				screen_on = 1;
+				printf("Wrist raise -> screen ON\r\n");
+			}
+			screen_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+		}
+
+		/* 亮屏超时 -> 熄屏 */
+		if (screen_on)
+		{
+			uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+			if (now - screen_ms > WRIST_SCREEN_TIMEOUT_MS)
+			{
+				ST7789_Set_Backlight(0);
+				screen_on = 0;
+				printf("Timeout -> screen OFF\r\n");
+			}
+		}
+
+//		printf("Roll=%.1f Pitch=%.1f Cadence=%.0f Steps=%d\r\n",
+//		       result.roll, result.pitch, result.cadence, (int)result.steps);
+		vTaskDelay(50);        // 50ms周期
 	}
 }

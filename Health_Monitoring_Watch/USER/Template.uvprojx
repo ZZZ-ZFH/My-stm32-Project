@@ -338,7 +338,7 @@
               <MiscControls></MiscControls>
               <Define>USE_STDPERIPH_DRIVER,STM32F40_41xxx,LV_LVGL_H_INCLUDE_SIMPLE</Define>
               <Undefine></Undefine>
-              <IncludePath>..\USER;..\CORE;..\FWLIB\inc;..\FreeRTOS\include;..\FreeRTOS\portable\RVDS\ARM_CM4F;..\LVGL;..\LVGL\src;..\LVGL\examples\porting;..\HAL\inc;..\APP\inc;..\HAL\inc</IncludePath>
+              <IncludePath>..\USER;..\CORE;..\FWLIB\inc;..\FreeRTOS\include;..\FreeRTOS\portable\RVDS\ARM_CM4F;..\LVGL;..\LVGL\src;..\LVGL\examples\porting;..\HAL\inc;..\APP\inc;..\HAL\inc;..\Middleware\inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -561,6 +561,11 @@
               <FileName>uart1.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\HAL\src\uart1.c</FilePath>
+            </File>
+            <File>
+              <FileName>icm20602.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\HAL\src\icm20602.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -1689,6 +1694,16 @@
               <FileName>bluetooth-line.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\LVGL\image\bluetooth-line.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Middleware</GroupName>
+          <Files>
+            <File>
+              <FileName>imu_algo.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middleware\src\imu_algo.c</FilePath>
             </File>
           </Files>
         </Group>

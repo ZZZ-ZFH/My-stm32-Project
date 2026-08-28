@@ -14,13 +14,14 @@
 #define MAX30102_SCL_PIN     GPIO_Pin_9      /* PC9 时钟线 */
 
 /* ==================== 中断引脚 ==================== */
-/* INT为开漏输出低有效, 配EXTI11下降沿, FIFO将满(A_FULL)时通知任务
- * (PC7已让给蓝牙USART6_RX, INT移至PC11) */
-#define MAX30102_INT_PORT    GPIOC
-#define MAX30102_INT_PIN     GPIO_Pin_11     /* PC11 中断线 */
-#define MAX30102_INT_EXTI_LINE      EXTI_Line11
-#define MAX30102_INT_EXTI_PORT_SRC  EXTI_PortSourceGPIOC
-#define MAX30102_INT_EXTI_PIN_SRC   EXTI_PinSource11
+/* INT为开漏输出低有效, 配EXTI15下降沿, FIFO将满(A_FULL)时通知任务
+ * (PC7已让给蓝牙USART6_RX; PA15为JTAG脚, 配置为输入即自动释放JTDI,
+ * SWD调试口PA13/PA14不受影响) */
+#define MAX30102_INT_PORT    GPIOA
+#define MAX30102_INT_PIN     GPIO_Pin_15    /* PA15 中断线 */
+#define MAX30102_INT_EXTI_LINE      EXTI_Line15
+#define MAX30102_INT_EXTI_PORT_SRC  EXTI_PortSourceGPIOA
+#define MAX30102_INT_EXTI_PIN_SRC   EXTI_PinSource15
 #define MAX30102_INT_IRQn           EXTI15_10_IRQn
 
 /* ==================== 器件参数 ==================== */

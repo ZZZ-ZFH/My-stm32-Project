@@ -1,7 +1,7 @@
 /**
  * @file    max30102.c
  * @brief   MAX30102 心率血氧传感器驱动(标准库版本), 由模块资料参考代码移植
- *          硬件: 软件I2C PC8=SDA PC9=SCL (开漏+上拉), INT=PC11 (EXTI11下降沿)
+ *          硬件: 软件I2C PC8=SDA PC9=SCL (开漏+上拉), INT=PA15 (EXTI15下降沿)
  *          INT中断: FIFO将满(A_FULL, 阈值17样本)时EXTI通知任务读FIFO,
  *          无数据时任务阻塞, 不轮询总线
  * @note    采样100sps, INT约每170ms触发一次; 任务纯中断驱动无轮询;
@@ -16,6 +16,15 @@
 #define SAMPLE_RATE_HZ    100                          /* 采样率 */
 #define BUFFER_LEN        (SAMPLE_RATE_HZ * 5)         /* 500样本=5秒 */
 #define SAMPLES_PER_CALC  SAMPLE_RATE_HZ               /* 每次重算补充样本数 */
+
+/* ---- 有效性过滤 ---- */
+/* 接触检测: IR直流低于该值判定"手指未放置"(环境光噪声), 需现场标定 */
+#define IR_TOUCH_THRESHOLD   50000
+/* 生理范围: 超出判定算法误检(参考算法valid标志不可靠) */
+#define HR_MIN               40
+#define HR_MAX               200
+#define SPO2_MIN             70
+#define SPO2_MAX             100
 
 /* ==================== 模拟I2C 位操作 ==================== */
 #define SDA_H()     GPIO_SetBits(MAX30102_SDA_PORT, MAX30102_SDA_PIN)
@@ -190,14 +199,16 @@ static void MAX30102_IntInit(void)
     EXTI_InitTypeDef EXTI_InitStructure;
     NVIC_InitTypeDef NVIC_InitStructure;
 
-    /* PC11: 输入上拉(INT开漏输出需外部上拉) */
-    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
+    /* PA15: F4无需SWJ重映射, 配置为普通输入即自动释放JTDI
+     * (SWD调试口在PA13/PA14, 不受影响; INT开漏输出, MCU内部上拉
+     * 保证高电平可识别, 模块自身上拉在1.8V域) */
+    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
     GPIO_InitStructure.GPIO_Pin  = MAX30102_INT_PIN;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN;
     GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
     GPIO_Init(MAX30102_INT_PORT, &GPIO_InitStructure);
 
-    /* EXTI线11映射到PC11, 下降沿触发 */
+    /* EXTI线15映射到PA15, 下降沿触发 */
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_SYSCFG, ENABLE);
     SYSCFG_EXTILineConfig(MAX30102_INT_EXTI_PORT_SRC,
                            MAX30102_INT_EXTI_PIN_SRC);
@@ -321,10 +332,24 @@ uint8_t MAX30102_Process(max30102_result_t *result)
     {
         int32_t hr, spo2;
         int8_t  hr_valid, spo2_valid;
+        uint32_t ir_sum = 0;
+        uint16_t k;
 
         maxim_heart_rate_and_oxygen_saturation(
             s_ir_buffer, BUFFER_LEN, s_red_buffer,
             &spo2, &spo2_valid, &hr, &hr_valid);
+
+        /* 接触检测+生理范围过滤: 参考算法的valid标志不可靠
+         * (无手指时噪声也会输出伪心率且标valid=1) */
+        for (k = 0; k < BUFFER_LEN; k++)
+            ir_sum += s_ir_buffer[k];              /* 500样本求和 */
+        if (ir_sum / BUFFER_LEN < IR_TOUCH_THRESHOLD)
+            hr_valid = spo2_valid = 0;             /* 未放置手指 */
+        else
+        {
+            if (hr < HR_MIN || hr > HR_MAX)        hr_valid   = 0;
+            if (spo2 < SPO2_MIN || spo2 > SPO2_MAX) spo2_valid = 0;
+        }
 
         if (result != NULL)
         {
