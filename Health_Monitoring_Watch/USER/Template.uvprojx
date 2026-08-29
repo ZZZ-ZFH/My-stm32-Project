@@ -1691,9 +1691,59 @@
           <GroupName>LVGL_IMAGE</GroupName>
           <Files>
             <File>
-              <FileName>bluetooth-line.c</FileName>
+              <FileName>blood_oxygen.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\LVGL\image\bluetooth-line.c</FilePath>
+              <FilePath>..\LVGL\image\blood_oxygen.c</FilePath>
+            </File>
+            <File>
+              <FileName>game.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\game.c</FilePath>
+            </File>
+            <File>
+              <FileName>heart_rate.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\heart_rate.c</FilePath>
+            </File>
+            <File>
+              <FileName>mobile_data.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\mobile_data.c</FilePath>
+            </File>
+            <File>
+              <FileName>notification.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\notification.c</FilePath>
+            </File>
+            <File>
+              <FileName>phone.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\phone.c</FilePath>
+            </File>
+            <File>
+              <FileName>setting.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\setting.c</FilePath>
+            </File>
+            <File>
+              <FileName>standby.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\standby.c</FilePath>
+            </File>
+            <File>
+              <FileName>steps.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\steps.c</FilePath>
+            </File>
+            <File>
+              <FileName>time.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\time.c</FilePath>
+            </File>
+            <File>
+              <FileName>bluetooth_line.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\LVGL\image\bluetooth_line.c</FilePath>
             </File>
           </Files>
         </Group>
