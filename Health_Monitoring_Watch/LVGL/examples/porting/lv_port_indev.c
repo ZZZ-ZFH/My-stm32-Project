@@ -13,6 +13,7 @@
 #include "../../lvgl.h"
 
 #include "cst816.h"
+#include "app_ui.h"
 
 /*********************
  *      DEFINES
@@ -199,6 +200,7 @@ static void touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
     if(touchpad_is_pressed()) {
         touchpad_get_xy(&last_x, &last_y);
         data->state = LV_INDEV_STATE_PR;
+        APP_UI_NotifyTouch();   /* 触摸活动通知(熄屏计时保活) */
     }
     else {
         data->state = LV_INDEV_STATE_REL;
