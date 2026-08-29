@@ -26,6 +26,7 @@
 #include "dx24.h"
 #include "imu_algo.h"
 #include "st7789.h"
+#include "rtc.h"
 
 /* 任务句柄(创建后仅调试器线程感知使用, 不对外暴露) */
 static TaskHandle_t app_task1_handle     = NULL;
@@ -57,6 +58,14 @@ static void app_task1(void* pvParameters)
 	LED_Init();
 	Uart1_Init(9600);
 	printf("Uart1_Init\r\n");
+
+	// RTC初始化(LSE启动需等待稳定, 首次上电装入编译时刻, 之后VBAT保持走时)
+	Rtc_Init();
+	{
+		uint8_t h, m, s;
+		Rtc_GetTime(&h, &m, &s);
+		printf("RTC: %02d:%02d:%02d\r\n", h, m, s);
+	}
 
 	// 创建user_task1任务  LVGL
 	xTaskCreate((TaskFunction_t )user_task1,
@@ -227,6 +236,21 @@ static void icm20602_task(void* pvParameters)
 	{
 		IMU_Alg_Process(50);   // 50ms采样周期(20Hz), 与vTaskDelay一致
 		IMU_Alg_GetResult(&result);
+
+		/* 步数推送到应用层UI(线程安全: 内部仅写共享变量) */
+		APP_UI_SetSteps((uint32_t)result.steps);
+
+		/* 触摸活动 -> 亮屏并重置熄屏计时(点击/滑动期间不熄屏) */
+		if (APP_UI_ConsumeTouchActivity())
+		{
+			if (!screen_on)
+			{
+				ST7789_Set_Backlight(100);
+				screen_on = 1;
+				printf("Touch -> screen ON\r\n");
+			}
+			screen_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+		}
 
 		/* 抬手手势 -> 亮屏(事件型, 仅一帧有效) */
 		if (result.wrist_raise)
