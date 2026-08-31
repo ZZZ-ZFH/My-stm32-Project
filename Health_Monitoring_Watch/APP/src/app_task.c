@@ -215,9 +215,11 @@ static void dx24_task(void* pvParameters)
 }
 
 // IMU算法任务: Middleware层姿态解算+计步+抬手检测, 50ms周期(桥接HAL采集)
-// 抬手亮屏: 检测到抬手手势->背光开, 10秒无抬手->背光关
+// 抬手亮屏: 检测到抬手手势->背光开; 20秒无任何操作(触摸/抬手)->背光关+CPU睡眠模式
 // (软件I2C PB0=SCL PC13=SDA, 初始化含陀螺零偏校准需静止约2秒)
-#define WRIST_SCREEN_TIMEOUT_MS   10000u      /* 亮屏持续时间 */
+#define WRIST_SCREEN_TIMEOUT_MS   20000u      /* 无操作熄屏时间(触摸/抬手重置) */
+
+volatile uint8_t g_screen_off = 0;   /* 熄屏标志: 空闲钩子据此让CPU进睡眠模式 */
 
 static void icm20602_task(void* pvParameters)
 {
@@ -247,6 +249,7 @@ static void icm20602_task(void* pvParameters)
 			{
 				ST7789_Set_Backlight(100);
 				screen_on = 1;
+				g_screen_off = 0;      /* 唤醒CPU退出睡眠模式 */
 				printf("Touch -> screen ON\r\n");
 			}
 			screen_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
@@ -259,12 +262,13 @@ static void icm20602_task(void* pvParameters)
 			{
 				ST7789_Set_Backlight(100);
 				screen_on = 1;
+				g_screen_off = 0;      /* 唤醒CPU退出睡眠模式 */
 				printf("Wrist raise -> screen ON\r\n");
 			}
 			screen_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
 		}
 
-		/* 亮屏超时 -> 熄屏 */
+		/* 亮屏超时 -> 熄屏(空闲钩子检测到熄屏后让CPU进睡眠模式) */
 		if (screen_on)
 		{
 			uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
@@ -272,12 +276,26 @@ static void icm20602_task(void* pvParameters)
 			{
 				ST7789_Set_Backlight(0);
 				screen_on = 0;
-				printf("Timeout -> screen OFF\r\n");
+				g_screen_off = 1;
+				printf("Timeout -> screen OFF + CPU sleep\r\n");
 			}
 		}
 
 //		printf("Roll=%.1f Pitch=%.1f Cadence=%.0f Steps=%d\r\n",
 //		       result.roll, result.pitch, result.cadence, (int)result.steps);
 		vTaskDelay(50);        // 50ms周期
+	}
+}
+
+/* FreeRTOS空闲钩子: 熄屏后CPU进入睡眠模式(WFI), 实现低功耗
+ * - 睡眠模式(非深度睡眠): SysTick/外设中断正常工作, 任何中断唤醒CPU继续调度
+ * - 触摸轮询/IMU采集任务照常运行, 检测到触摸或抬手即亮屏并退出睡眠
+ * - 亮屏期间不执行WFI, 保证界面渲染的响应速度 */
+void vApplicationIdleHook(void)
+{
+	if (g_screen_off)
+	{
+		SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;   /* 睡眠模式(浅睡), 非深度睡眠 */
+		__WFI();                              /* 等待中断: CPU暂停, 中断唤醒后继续 */
 	}
 }

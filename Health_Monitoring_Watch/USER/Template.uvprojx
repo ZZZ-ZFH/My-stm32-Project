@@ -338,7 +338,7 @@
               <MiscControls></MiscControls>
               <Define>USE_STDPERIPH_DRIVER,STM32F40_41xxx,LV_LVGL_H_INCLUDE_SIMPLE</Define>
               <Undefine></Undefine>
-              <IncludePath>..\USER;..\CORE;..\FWLIB\inc;..\FreeRTOS\include;..\FreeRTOS\portable\RVDS\ARM_CM4F;..\LVGL;..\LVGL\src;..\LVGL\examples\porting;..\HAL\inc;..\APP\inc;..\HAL\inc;..\Middleware\inc</IncludePath>
+              <IncludePath>..\USER;..\CORE;..\FWLIB\inc;..\FreeRTOS\include;..\FreeRTOS\portable\RVDS\ARM_CM4F;..\LVGL;..\LVGL\src;..\LVGL\examples\porting;..\HAL\inc;..\APP\inc;..\Middleware\inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -503,11 +503,6 @@
           <GroupName>HAL</GroupName>
           <Files>
             <File>
-              <FileName>algorithm.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\HAL\src\algorithm.c</FilePath>
-            </File>
-            <File>
               <FileName>beep.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\HAL\src\beep.c</FilePath>
@@ -516,11 +511,6 @@
               <FileName>cst816.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\HAL\src\cst816.c</FilePath>
-            </File>
-            <File>
-              <FileName>delay.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\HAL\src\delay.c</FilePath>
             </File>
             <File>
               <FileName>dx24.c</FileName>
@@ -540,7 +530,7 @@
             <File>
               <FileName>protocol.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\HAL\src\protocol.c</FilePath>
+              <FilePath>..\Middleware\src\protocol.c</FilePath>
             </File>
             <File>
               <FileName>rtc.c</FileName>
@@ -1754,6 +1744,21 @@
               <FileName>imu_algo.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Middleware\src\imu_algo.c</FilePath>
+            </File>
+            <File>
+              <FileName>delay.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middleware\src\delay.c</FilePath>
+            </File>
+            <File>
+              <FileName>algorithm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middleware\src\algorithm.c</FilePath>
+            </File>
+            <File>
+              <FileName>protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middleware\src\protocol.c</FilePath>
             </File>
           </Files>
         </Group>

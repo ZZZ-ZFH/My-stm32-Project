@@ -10,7 +10,8 @@
 #include "max30102.h"
 #include "algorithm.h"
 #include "delay.h"
-#include <string.h>
+#include "string.h"
+#include "stdio.h"
 
 /* ==================== 采样配置 ==================== */
 #define SAMPLE_RATE_HZ    100                          /* 采样率 */
@@ -43,6 +44,31 @@ static void MAX30102_I2C_SclWait(void)
     while (GPIO_ReadInputDataBit(MAX30102_SCL_PORT,
            MAX30102_SCL_PIN) == Bit_RESET && t--)
         ;
+}
+
+/* I2C总线卡死自恢复: 事务中途被打断/时序错乱后, 从设备可能停留在
+ * 半字节状态并持续拉低SDA, 导致后续START永远无法被识别(表现: 一律NACK)。
+ * 处理: 重新初始化GPIO, 发最多9个SCL时钟让从设备走完残余时序释放SDA,
+ * 最后补一个STOP条件。恢复失败也无副作用(下一次START重试)。 */
+static void MAX30102_I2C_GpioInit(void);   /* 前向声明 */
+static void MAX30102_I2C_BusRecover(void)
+{
+    uint8_t i;
+
+    MAX30102_I2C_GpioInit();     /* SDA/SCL释放为开漏高 */
+
+    for (i = 0; i < 9; i++)      /* 9个时钟脉冲: 覆盖一个完整字节+ACK */
+    {
+        SCL_L(); I2C_DELAY();
+        SCL_H(); MAX30102_I2C_SclWait(); I2C_DELAY();
+        if (SDA_READ() != Bit_RESET)
+            break;               /* 从设备已释放SDA */
+    }
+
+    /* STOP: SCL高电平期间SDA由低到高 */
+    SDA_L(); I2C_DELAY();
+    SCL_H(); MAX30102_I2C_SclWait(); I2C_DELAY();
+    SDA_H(); I2C_DELAY();
 }
 
 /* -------------------- GPIO 初始化 -------------------- */
@@ -121,35 +147,35 @@ static uint8_t MAX30102_I2C_ReadByte(uint8_t nack)
 }
 
 /* ==================== 寄存器读写 ==================== */
-/* 连续读寄存器, 返回0=成功 */
+/* 连续读寄存器, 返回0=成功; NACK时恢复总线(防从设备卡死SDA) */
 static uint8_t MAX30102_ReadRegs(uint8_t reg, uint8_t *buf, uint8_t len)
 {
     uint8_t i;
 
     MAX30102_I2C_Start();
     if (MAX30102_I2C_SendByte(MAX30102_I2C_ADDR << 1))
-        { MAX30102_I2C_Stop(); return 1; }
+        { MAX30102_I2C_Stop(); MAX30102_I2C_BusRecover(); return 1; }
     if (MAX30102_I2C_SendByte(reg))
-        { MAX30102_I2C_Stop(); return 1; }
+        { MAX30102_I2C_Stop(); MAX30102_I2C_BusRecover(); return 1; }
     MAX30102_I2C_Start();      /* 重复起始 */
     if (MAX30102_I2C_SendByte((MAX30102_I2C_ADDR << 1) | 1))
-        { MAX30102_I2C_Stop(); return 1; }
+        { MAX30102_I2C_Stop(); MAX30102_I2C_BusRecover(); return 1; }
     for (i = 0; i < len; i++)
         buf[i] = MAX30102_I2C_ReadByte(i == (len - 1) ? 1 : 0);
     MAX30102_I2C_Stop();
     return 0;
 }
 
-/* 写寄存器, 返回0=成功 */
+/* 写寄存器, 返回0=成功; NACK时恢复总线(防从设备卡死SDA) */
 static uint8_t MAX30102_WriteReg(uint8_t reg, uint8_t dat)
 {
     MAX30102_I2C_Start();
     if (MAX30102_I2C_SendByte(MAX30102_I2C_ADDR << 1))
-        { MAX30102_I2C_Stop(); return 1; }
+        { MAX30102_I2C_Stop(); MAX30102_I2C_BusRecover(); return 1; }
     if (MAX30102_I2C_SendByte(reg))
-        { MAX30102_I2C_Stop(); return 1; }
+        { MAX30102_I2C_Stop(); MAX30102_I2C_BusRecover(); return 1; }
     if (MAX30102_I2C_SendByte(dat))
-        { MAX30102_I2C_Stop(); return 1; }
+        { MAX30102_I2C_Stop(); MAX30102_I2C_BusRecover(); return 1; }
     MAX30102_I2C_Stop();
     return 0;
 }
@@ -244,6 +270,24 @@ void EXTI15_10_IRQHandler(void)
 }
 
 /* ==================== 对外 API ==================== */
+/* 传感器寄存器配置(Init与自愈恢复共用): FIFO/模式/LED电流 */
+static void MAX30102_Configure(void)
+{
+    /* 只使能A_FULL: FIFO达17样本触发一次INT, 约170ms唤醒一次任务
+     * (不使能PPG_RDY, 避免100Hz高频唤醒) */
+    (void)MAX30102_WriteReg(REG_INTR_ENABLE_1, 0x80);  /* A_FULL */
+    (void)MAX30102_WriteReg(REG_INTR_ENABLE_2, 0x00);
+    (void)MAX30102_WriteReg(REG_FIFO_WR_PTR, 0x00);    /* 复位FIFO指针 */
+    (void)MAX30102_WriteReg(REG_OVF_COUNTER, 0x00);
+    (void)MAX30102_WriteReg(REG_FIFO_RD_PTR, 0x00);
+    (void)MAX30102_WriteReg(REG_FIFO_CONFIG, 0x0F);    /* 1:1平均,满17中断 */
+    (void)MAX30102_WriteReg(REG_MODE_CONFIG, 0x03);    /* SpO2模式 */
+    (void)MAX30102_WriteReg(REG_SPO2_CONFIG, 0x27);    /* 4096nA,100sps,18bit */
+    (void)MAX30102_WriteReg(REG_LED1_PA, 0x24);        /* 红光约7mA */
+    (void)MAX30102_WriteReg(REG_LED2_PA, 0x24);        /* 红外约7mA */
+    (void)MAX30102_WriteReg(REG_PILOT_PA, 0x7F);       /* Pilot约25mA */
+}
+
 uint8_t MAX30102_Init(void)
 {
     uint8_t part_id;
@@ -259,21 +303,9 @@ uint8_t MAX30102_Init(void)
     if (part_id != 0x15)
         return 0;
 
-    /* 只使能A_FULL: FIFO达17样本触发一次INT, 约170ms唤醒一次任务
-     * (不使能PPG_RDY, 避免100Hz高频唤醒) */
-    (void)MAX30102_WriteReg(REG_INTR_ENABLE_1, 0x80);  /* A_FULL */
-    (void)MAX30102_WriteReg(REG_INTR_ENABLE_2, 0x00);
-    (void)MAX30102_WriteReg(REG_FIFO_WR_PTR, 0x00);    /* 复位FIFO指针 */
-    (void)MAX30102_WriteReg(REG_OVF_COUNTER, 0x00);
-    (void)MAX30102_WriteReg(REG_FIFO_RD_PTR, 0x00);
-    (void)MAX30102_WriteReg(REG_FIFO_CONFIG, 0x0F);    /* 1:1平均,满17中断 */
-    (void)MAX30102_WriteReg(REG_MODE_CONFIG, 0x03);    /* SpO2模式 */
-    (void)MAX30102_WriteReg(REG_SPO2_CONFIG, 0x27);    /* 4096nA,100sps,18bit */
-    (void)MAX30102_WriteReg(REG_LED1_PA, 0x24);        /* 红光约7mA */
-    (void)MAX30102_WriteReg(REG_LED2_PA, 0x24);        /* 红外约7mA */
-    (void)MAX30102_WriteReg(REG_PILOT_PA, 0x7F);       /* Pilot约25mA */
+    MAX30102_Configure();
 
-    MAX30102_IntInit();                                /* PC11/EXTI11 */
+    MAX30102_IntInit();                                /* PA15/EXTI15 */
 
     return 1;
 }
@@ -298,7 +330,13 @@ uint32_t MAX30102_WaitSampleEvent(uint32_t timeout_ms)
 }
 
 /* INT唤醒后调用: 读FIFO全部待读样本并累积,
- * 满BUFFER_LEN计算一次, 返回1=本次完成一轮计算, result已更新 */
+ * 满BUFFER_LEN计算一次, 返回1=本次完成一轮计算, result已更新
+ * 自愈: 采样永不停歇(100sps), 连续1s取不到样本说明总线卡死/模式掉电,
+ * 自动恢复总线并重新配置传感器(睡眠唤醒等场景的偶发故障兜底) */
+#define SELF_HEAL_EMPTY_ROUNDS   10          /* 连续空轮数(约1s)触发自愈 */
+
+static uint8_t s_empty_rounds;               /* 连续无样本轮次计数 */
+
 uint8_t MAX30102_Process(max30102_result_t *result)
 {
     uint8_t pending, i;
@@ -308,7 +346,25 @@ uint8_t MAX30102_Process(max30102_result_t *result)
     if (pending > MAX30102_FIFO_DEPTH)
         pending = MAX30102_FIFO_DEPTH;
 
-    if (pending > 0)
+    if (pending == 0)
+    {
+        /* 传感器正常时每轮都有新样本(100sps, 任务100ms兜底唤醒);
+         * ReadReg通信失败也返回0 -> pending=0, 同样被此计数捕获 */
+        if (++s_empty_rounds >= SELF_HEAL_EMPTY_ROUNDS)
+        {
+            s_empty_rounds = 0;
+            printf("MAX30102: no samples, bus recover...\r\n");
+            MAX30102_I2C_BusRecover();
+            if (MAX30102_ReadReg(REG_PART_ID) == 0x15)
+            {
+                MAX30102_Configure();       /* 重配FIFO/模式/LED */
+                printf("MAX30102: recovered\r\n");
+            }
+        }
+        return 0;
+    }
+    s_empty_rounds = 0;
+
     {
         /* 读清中断状态: A_FULL的INT引脚保持低直到读该寄存器,
          * 读清后下个A_FULL事件才能产生新的下降沿 */
@@ -323,7 +379,7 @@ uint8_t MAX30102_Process(max30102_result_t *result)
 
         if (MAX30102_ReadFifoSample(&s_red_buffer[s_sample_idx],
                                     &s_ir_buffer[s_sample_idx]) != 0)
-            break;  /* 通信失败, 本轮放弃 */
+            break;  /* 通信失败, 本轮放弃(下轮重试/触发自愈) */
 
         s_sample_idx++;
     }

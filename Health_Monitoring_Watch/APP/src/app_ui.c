@@ -1,35 +1,22 @@
 /**
  * @file    app_ui.c
  * @brief   健康监测手表应用层UI(多页面)
- *          移植自 watch_ui/ Beken设计器工程(LVGL 9.3), 适配本工程LVGL 8.3
  *
  * 页面结构(240x300):
- *   page_home              原Page_1  : 表盘主页(状态栏/日期时间/健康摘要)
- *   page_menu              原page_2  : 应用菜单页(9个应用图标入口, 纵向滚动)
- *   page_xxx_detail                  : 9个应用详情页(血氧/心率/通知/游戏/电话/
+ *   page_home              : 表盘主页(状态栏/日期时间/健康摘要)
+ *   page_menu              : 应用菜单页(9个应用图标入口, 纵向滚动)
+ *   page_xxx_detail        : 9个应用详情页(血氧/心率/通知/游戏/电话/
  *                                      设置/待机/步数/时间), 懒创建
- * 交互(与原工程一致):
+ * 交互:
  *   page_home  上滑(LV_DIR_TOP)  -> page_menu   (OVER_TOP)
  *   page_menu  右滑(LV_DIR_RIGHT)-> page_home   (OVER_RIGHT)
- *   page_menu  点击应用图标      -> 对应详情页   (OVER_RIGHT)
- *   详情页     左滑(LV_DIR_LEFT) -> page_menu   (OVER_LEFT)
- *
- * 命名对照(原工程中未命名的控件已重新命名):
- *   Page_1_obj_1               -> container_status_bar     顶部状态栏(图标行)
- *   Page_1_obj_2               -> container_status_spacer  状态栏上方占位
- *   Page_1_image_1             -> img_mobile_data          移动数据图标
- *                                  (本工程无该图片资源, 未创建, 保留命名)
- *   Page_1_image_2             -> img_bluetooth            蓝牙状态图标
- *   Page_1_label_heart_rate等  -> label_xxx_value          健康数值标签(原文本"Text")
- * LVGL9.3->8.3 主要API差异:
- *   lv_image_create->lv_img_create, lv_screen_load->lv_scr_load,
- *   lv_screen_active->lv_scr_act, lv_indev_active->lv_indev_get_act
+ *   page_menu  点击应用图标      -> 对应详情页  (OVER_RIGHT)
+ *   详情页     右滑(LV_DIR_RIGHT)-> page_menu   (OVER_RIGHT)
  *
  * @note    分层: 本模块属应用层, 只调用LVGL中间件接口, 不直接操作硬件;
  *          LVGL非线程安全: 数据经共享变量传递, 界面刷新全部在
  *          lv_task_handler所在任务上下文(lv_timer回调)内完成
  * @note    图片资源在 LVGL/image/ (100x100, LVGL8 C数组);
- *          原工程 fufu1_240x300 表盘背景图未转换, 主页用纯色背景替代
  */
 #include "app_ui.h"
 #include "lvgl.h"
@@ -47,7 +34,7 @@
 #define UI_TEXT_MENU        lv_color_hex(0x000000)
 #define UI_BT_COLOR_OFF     lv_color_hex(0x808080)  /* 蓝牙/移动数据未连接: 灰色 */
 #define UI_BT_COLOR_ON      lv_color_hex(0x2196F3)  /* 蓝牙/移动数据已连接: 蓝色 */
-#define UI_REFRESH_PERIOD_MS 500              /* 健康数据刷新周期 */
+#define UI_REFRESH_PERIOD_MS 500              		/* 健康数据刷新周期 */
 
 /* ==================== 共享数据(跨任务) ====================
  * Cortex-M4对32位对齐变量的读写为原子操作, 无需加锁 */
@@ -69,7 +56,7 @@ LV_IMG_DECLARE(image_game);             /* 100x100 游戏图标 */
 LV_IMG_DECLARE(image_phone);            /* 100x100 电话图标 */
 LV_IMG_DECLARE(image_setting);          /* 100x100 设置图标 */
 LV_IMG_DECLARE(image_standby);          /* 100x100 待机图标 */
-LV_IMG_DECLARE(image_steps);            /* 100x100 步数图标(TRUE_COLOR黑底) */
+LV_IMG_DECLARE(image_steps);            /* 100x100 步数图标 */
 LV_IMG_DECLARE(image_time);             /* 100x100 时间图标 */
 
 /* ==================== 应用(详情页)定义 ==================== */
@@ -400,25 +387,25 @@ static void create_page_home(void)
     lv_obj_set_flex_flow(ui.label_group_health, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(ui.label_group_health, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_size(ui.label_group_health, 100, 90);
+    lv_obj_set_size(ui.label_group_health, 120, 90);
 
     ui.label_heart_rate_value = lv_label_create(ui.label_group_health);
     lv_label_set_text(ui.label_heart_rate_value, "-- bpm");
-    lv_obj_set_width(ui.label_heart_rate_value, 95);   /* 容器宽100-5, 避免滚动条 */
+    lv_obj_set_width(ui.label_heart_rate_value, 115);   /* 容器宽100-5, 避免滚动条 */
     lv_obj_set_style_text_color(ui.label_heart_rate_value, UI_TEXT_HOME, 0);
     lv_obj_set_style_text_font(ui.label_heart_rate_value, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_align(ui.label_heart_rate_value, LV_TEXT_ALIGN_LEFT, 0);
 
     ui.label_blood_oxygen_value = lv_label_create(ui.label_group_health);
     lv_label_set_text(ui.label_blood_oxygen_value, "-- %");
-    lv_obj_set_width(ui.label_blood_oxygen_value, 95);  /* 容器宽100-5, 避免滚动条 */
+    lv_obj_set_width(ui.label_blood_oxygen_value, 115);  
     lv_obj_set_style_text_color(ui.label_blood_oxygen_value, UI_TEXT_HOME, 0);
     lv_obj_set_style_text_font(ui.label_blood_oxygen_value, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_align(ui.label_blood_oxygen_value, LV_TEXT_ALIGN_LEFT, 0);
 
     ui.label_steps_value = lv_label_create(ui.label_group_health);
     lv_label_set_text(ui.label_steps_value, "0");
-    lv_obj_set_width(ui.label_steps_value, 95);         /* 容器宽100-5, 避免滚动条 */
+    lv_obj_set_width(ui.label_steps_value, 115);         
     lv_obj_set_style_text_color(ui.label_steps_value, UI_TEXT_HOME, 0);
     lv_obj_set_style_text_font(ui.label_steps_value, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_align(ui.label_steps_value, LV_TEXT_ALIGN_LEFT, 0);
