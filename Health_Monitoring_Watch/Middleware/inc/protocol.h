@@ -1,4 +1,4 @@
-﻿#ifndef __PROTOCOL_H__
+#ifndef __PROTOCOL_H__
 #define __PROTOCOL_H__
 
 #include <stdint.h>
@@ -48,6 +48,11 @@ typedef enum {
 
 #define ON		"1"
 #define OFF		"0"
+
+/* 协议封包/解帧 */
+uint16_t Protocol_Pack(uint8_t *out_buf, uint8_t cmd,
+                       const uint8_t *data, uint16_t data_len);
+int8_t Protocol_Parse_Frame(const uint8_t *data, uint16_t len, ProtocolFrame *frame);
 
 extern void Protocol_SendDemo();
 extern void Protocol_RecDemo();
