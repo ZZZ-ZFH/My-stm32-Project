@@ -11,4 +11,9 @@ void APP_Task_Init(void);
  * 立即点亮背光+退出CPU睡眠, 熄屏计时自动重置 */
 void APP_Task_ForceScreenOn(void);
 
+/* 进入待机(任意任务上下文可调, 菜单待机图标场景):
+ * 请求熄屏+CPU睡眠(经数个周期延时, 等待点击触摸释放),
+ * 唤醒方式: 触摸/抬手手势/闹钟弹窗 */
+void APP_Task_EnterStandby(void);
+
 #endif

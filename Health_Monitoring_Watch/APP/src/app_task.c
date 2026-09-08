@@ -235,9 +235,11 @@ static void dx24_task(void* pvParameters)
 // 抬手亮屏: 检测到抬手手势->背光开; 20秒无任何操作(触摸/抬手)->背光关+CPU睡眠模式
 // (软件I2C PB0=SCL PC13=SDA, 初始化含陀螺零偏校准需静止约2秒)
 #define WRIST_SCREEN_TIMEOUT_MS   20000u      /* 无操作熄屏时间(触摸/抬手重置) */
+#define STANDBY_DELAY_TICKS       8u          /* 待机延时周期数(8x50ms=400ms, 等触摸释放) */
 
 volatile uint8_t g_screen_off = 0;   /* 熄屏标志: 空闲钩子据此让CPU进睡眠模式 */
 volatile uint8_t g_force_screen_on = 0; /* 强制亮屏请求(闹钟弹窗等置位, 本任务消费) */
+volatile uint8_t g_standby_req = 0;     /* 待机请求(菜单待机图标置位, 本任务消费) */
 
 /* 强制亮屏(任意任务上下文可调): 立即点亮背光并退出CPU睡眠,
  * 熄屏计时由icm20602_task同步重置(弹窗显示期间不会超时熄屏) */
@@ -248,6 +250,14 @@ void APP_Task_ForceScreenOn(void)
 	g_force_screen_on = 1;
 }
 
+/* 进入待机(任意任务上下文可调): 仅置请求标志,
+ * icm20602_task延时数个周期后熄屏(等待点击待机图标的触摸释放,
+ * 防止残留触摸活动立即触发"触摸唤醒") */
+void APP_Task_EnterStandby(void)
+{
+	g_standby_req = 1;
+}
+
 static void icm20602_task(void* pvParameters)
 {
 	imu_result_t result;
@@ -255,6 +265,7 @@ static void icm20602_task(void* pvParameters)
 	uint32_t screen_ms   = 0;                 /* 上次亮屏/交互时刻 */
 	uint32_t steps_last  = 0;                 /* 上次保存的步数 */
 	uint8_t  sday_y = 0, sday_m = 0, sday_d = 0; /* 步数所属日期 */
+	uint8_t  standby_hold = 0;                /* 待机延时倒计时(周期数) */
 
 	if (IMU_Alg_Init() == 0)
 	{
@@ -310,16 +321,38 @@ static void icm20602_task(void* pvParameters)
 			SVC_RTC_SaveSteps(steps_last, sday_y, sday_m, sday_d);
 		}
 
-		/* 强制亮屏请求(闹钟弹窗): 同步熄屏计时, 防弹窗期间超时熄屏 */
+		/* 强制亮屏请求(闹钟弹窗): 同步熄屏计时, 防弹窗期间超时熄屏;
+		 * 同时取消待机请求(闹钟优先于待机) */
 		if (g_force_screen_on)
 		{
 			g_force_screen_on = 0;
+			standby_hold = 0;
 			if (!screen_on)
 			{
 				screen_on = 1;
 				printf("Force -> screen ON\r\n");
 			}
 			screen_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+		}
+
+		/* 待机请求(菜单待机图标): 延时数个周期再熄屏,
+		 * 期间吞掉本次点击残留的触摸活动, 防止立即触发"触摸唤醒" */
+		if (g_standby_req)
+		{
+			g_standby_req = 0;
+			standby_hold = STANDBY_DELAY_TICKS;
+		}
+		if (standby_hold > 0)
+		{
+			standby_hold--;
+			(void)APP_UI_ConsumeTouchActivity();
+			if (standby_hold == 0 && screen_on)
+			{
+				SVC_DISPLAY_SetBacklight(0);
+				screen_on = 0;
+				g_screen_off = 1;
+				printf("Standby -> screen OFF + CPU sleep\r\n");
+			}
 		}
 
 		/* 触摸活动 -> 亮屏并重置熄屏计时(点击/滑动期间不熄屏) */
