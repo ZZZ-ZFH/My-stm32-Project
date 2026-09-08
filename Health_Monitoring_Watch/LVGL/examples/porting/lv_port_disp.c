@@ -19,20 +19,23 @@
 #define MY_DISP_HOR_RES    LCD_W       /* 240 */
 #define MY_DISP_VER_RES    LCD_H       /* 300 */
 
-/* 绘制缓冲行数: 240*40*2 = 19.2KB */
-#define DISP_BUF_LINES     40
+/* 双缓冲绘制行数: 每缓冲240*10*2=4.8KB, 两缓冲共9.6KB(ZI)
+ * 双缓冲下LVGL渲染另一缓冲期间DMA正在传输当前缓冲, 渲染与传输流水并行 */
+#define DISP_BUF_LINES     10
 
 /**********************
  *  STATIC PROTOTYPES
  **********************/
 static void disp_init(void);
 static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p);
-//static void gpu_fill(lv_disp_drv_t * disp_drv, lv_color_t * dest_buf, lv_coord_t dest_width,
-//        const lv_area_t * fill_area, lv_color_t color);
+static void flush_done_cb(void);     /* DMA传输完成回调(st7789 TC中断上下文) */
 
 /**********************
  *  STATIC VARIABLES
  **********************/
+/* 正在DMA传输的显示驱动句柄: flush时登记, TC中断回调据此调用flush_ready
+ * (32位对齐指针, 读写原子; 单刷新任务单显示, 无并发) */
+static lv_disp_drv_t *s_flushing_drv;
 
 /**********************
  *      MACROS
@@ -74,24 +77,13 @@ void lv_port_disp_init(void)
      *      and you only need to change the frame buffer's address.
      */
 
-    /* Example for 1) */
-    static lv_disp_draw_buf_t draw_buf_dsc_1;
-    static lv_color_t buf_1[MY_DISP_HOR_RES * 10];                          /*A buffer for 10 rows*/
-    lv_disp_draw_buf_init(&draw_buf_dsc_1, buf_1, NULL, MY_DISP_HOR_RES * 10);   /*Initialize the display buffer*/
-#if 0
-    /* Example for 2) */
-    static lv_disp_draw_buf_t draw_buf_dsc_2;
-    static lv_color_t buf_2_1[MY_DISP_HOR_RES * 10];                        /*A buffer for 10 rows*/
-    static lv_color_t buf_2_2[MY_DISP_HOR_RES * 10];                        /*An other buffer for 10 rows*/
-    lv_disp_draw_buf_init(&draw_buf_dsc_2, buf_2_1, buf_2_2, MY_DISP_HOR_RES * 10);   /*Initialize the display buffer*/
-
-    /* Example for 3) also set disp_drv.full_refresh = 1 below*/
-    static lv_disp_draw_buf_t draw_buf_dsc_3;
-    static lv_color_t buf_3_1[MY_DISP_HOR_RES * MY_DISP_VER_RES];            /*A screen sized buffer*/
-    static lv_color_t buf_3_2[MY_DISP_HOR_RES * MY_DISP_VER_RES];            /*Another screen sized buffer*/
-    lv_disp_draw_buf_init(&draw_buf_dsc_3, buf_3_1, buf_3_2,
-                          MY_DISP_VER_RES * LV_VER_RES_MAX);   /*Initialize the display buffer*/
-#endif
+    /* 双缓冲(方案2): LVGL渲染其中一块期间, 另一块由DMA送往屏幕,
+     * 渲染与传输流水并行; flush_cb异步返回, 完成由TC中断回调flush_ready */
+    static lv_disp_draw_buf_t draw_buf_dsc;
+    static lv_color_t buf_1[MY_DISP_HOR_RES * DISP_BUF_LINES];
+    static lv_color_t buf_2[MY_DISP_HOR_RES * DISP_BUF_LINES];
+    lv_disp_draw_buf_init(&draw_buf_dsc, buf_1, buf_2,
+                          MY_DISP_HOR_RES * DISP_BUF_LINES);
     /*-----------------------------------
      * Register the display in LVGL
      *----------------------------------*/
@@ -102,7 +94,10 @@ void lv_port_disp_init(void)
     disp_drv.hor_res  = MY_DISP_HOR_RES;
     disp_drv.ver_res  = MY_DISP_VER_RES;
     disp_drv.flush_cb = disp_flush;
-    disp_drv.draw_buf = &draw_buf_dsc_1;
+    disp_drv.draw_buf = &draw_buf_dsc;
+
+    /* 登记DMA完成回调: TC中断中调用flush_ready, 释放LVGL对该缓冲的占用 */
+    ST7789_SetFlushDoneCB(flush_done_cb);
 
     lv_disp_drv_register(&disp_drv);
 }
@@ -135,19 +130,24 @@ void disp_disable_update(void)
 }
 
 /*Flush the content of the internal buffer the specific area on the display
- *You can use DMA or any hardware acceleration to do this operation in the background but
- *'lv_disp_flush_ready()' has to be called when finished.*/
+ *DMA异步刷新: 等待上次DMA完成->设窗口->启动本次DMA后立即返回,
+ *'lv_disp_flush_ready()'在DMA传输完成中断(flush_done_cb)中调用 */
 static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)
 {
     if(disp_flush_enabled)
     {
         uint32_t size = (uint32_t)(area->x2 - area->x1 + 1) * (area->y2 - area->y1 + 1);
 
+        /* 等待上一次DMA传完(阻塞在信号量上, CPU让给其他任务);
+         * 双缓冲下此刻LVGL刚渲染完本缓冲, 上缓冲可能仍在传输 */
+        ST7789_Flush_Wait();
+
         ST7789_Address_Set((uint16_t)area->x1, (uint16_t)area->y1,
                            (uint16_t)area->x2, (uint16_t)area->y2);
 
 #if LV_COLOR_16_SWAP == 0
-        /* LVGL为小端RGB565, ST7789需要大端: 原地交换高低字节 */
+        /* LVGL为小端RGB565, ST7789需要大端: 原地交换高低字节
+         * (操作的是本缓冲, 与仍在传输的另一缓冲无冲突) */
         {
             uint16_t *p = (uint16_t *)color_p;
             uint32_t i;
@@ -156,9 +156,31 @@ static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_colo
         }
 #endif
 
-        ST7789_Wr_Buf((const uint8_t *)color_p, size * 2);
-
+        /* 先登记驱动句柄再启动DMA: TC中断据此回调flush_ready */
+        s_flushing_drv = disp_drv;
+        if (ST7789_Flush_Start((const uint8_t *)color_p, size * 2) == 0)
+        {
+            /* 防御回退: DMA启动失败(超长/忙)退化为阻塞发送 */
+            s_flushing_drv = NULL;
+            ST7789_Wr_Buf((const uint8_t *)color_p, size * 2);
+            lv_disp_flush_ready(disp_drv);
+        }
+    }
+    else
+    {
+        /* 刷新被禁用: 仍须报完成, 否则LVGL刷新流程挂起 */
         lv_disp_flush_ready(disp_drv);
+    }
+}
+
+/* DMA传输完成回调(st7789 TC中断上下文, 不得阻塞):
+ * 通知LVGL该缓冲已送出, 可继续渲染 */
+static void flush_done_cb(void)
+{
+    if (s_flushing_drv != NULL)
+    {
+        lv_disp_flush_ready(s_flushing_drv);
+        s_flushing_drv = NULL;
     }
 }
 

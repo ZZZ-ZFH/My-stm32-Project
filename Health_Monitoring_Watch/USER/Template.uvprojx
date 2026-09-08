@@ -537,6 +537,11 @@
               <FileType>1</FileType>
               <FilePath>..\HAL\src\hal_delay.c</FilePath>
             </File>
+            <File>
+              <FileName>hal_dma.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\HAL\src\hal_dma.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

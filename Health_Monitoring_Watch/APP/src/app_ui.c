@@ -241,14 +241,17 @@ static void detail_page_event_cb(lv_event_t *e)
     }
 }
 
-/* 菜单按钮: 点击 -> 对应详情页(user_data=应用索引) */
+/* 菜单按钮: 点击 -> 对应详情页(user_data=应用索引);
+ * 待机图标无详情页, 点击直接请求进入待机(触摸/抬手/闹钟唤醒) */
 static void menu_btn_event_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED)
     {
         int idx = (int)(intptr_t)lv_event_get_user_data(e);
-        if (s_app[idx].has_detail)   /* 无详情页的应用点击不响应 */
+        if (s_app[idx].has_detail)
             show_detail_page(idx);
+        else if (idx == APP_STANDBY)
+            APP_Task_EnterStandby();
     }
 }
 

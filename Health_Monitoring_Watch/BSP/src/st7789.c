@@ -1,16 +1,22 @@
 /**
  * @file    st7789.c
  * @brief   ST7789 LCD 板级驱动: 引脚/外设参数集中于 hardware_config.h,
- *          GPIO/SPI/PWM 初始化与收发统一经由 HAL 层(hal_gpio/hal_spi/hal_tim)
+ *          GPIO/SPI/PWM/DMA 初始化与收发统一经由 HAL 层(hal_gpio/hal_spi/hal_tim/hal_dma)
  *          硬件: SPI1(PB3-SCK, PB5-MOSI) + TIM2_CH3背光PWM(PA2) + RES(PB11)/CS(PA3)/DC(PB10)
+ *          刷屏通路: DMA2_Stream3(SPI1_TX)异步传输 + TC中断通知, 供LVGL双缓冲流水刷新
  * @note    HAL_Delay_Ms 在 FreeRTOS 下可安全使用(见 HAL/src/hal_delay.c)
  */
 #include "st7789.h"
 #include "hal_delay.h"
+#include "hal_dma.h"
 #include "hal_gpio.h"
 #include "hal_spi.h"
 #include "hal_tim.h"
 #include "hardware_config.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
+#include <stdio.h>
 
 /* ==================== IO 操作宏(驱动内部使用, 经HAL层) ==================== */
 #define LCD_RES_Clr()   HAL_GPIO_WritePin(LCD_RES_PORT, LCD_RES_PIN, 0)
@@ -106,10 +112,103 @@ static const HAL_TIM_PWMConfig_t s_bl_pwm_cfg = {
     .pulse     = 100,               /* 默认全亮 */
 };
 
+/* -------------------- 刷屏DMA异步通路 -------------------- */
+/* DMA完成信号量: TC中断生产, Flush_Wait消费(单消费者: 显示刷新任务) */
+static SemaphoreHandle_t s_flush_sem;
+static volatile uint8_t   s_flush_active;          /* DMA进行中标志(ISR清零) */
+static ST7789_FlushDone_cb_t s_flush_done_cb;      /* 上层完成回调(lv_disp_flush_ready) */
+
+/* DMA TC中断回调(HAL_DMA_IRQHandler转调, 中断上下文, 不得阻塞) */
+static void st7789_dma_tc_cb(void)
+{
+    BaseType_t woken = pdFALSE;
+
+    s_flush_active = 0;
+    if (s_flush_done_cb != NULL)
+        s_flush_done_cb();                 /* 通知上层: 缓冲已传完可复用 */
+    xSemaphoreGiveFromISR(s_flush_sem, &woken);
+    portYIELD_FROM_ISR(woken);
+}
+
+/* DMA2流3板级配置描述符(SPI1_TX固定映射);
+ * 外设地址为寄存器地址(非常量表达式), 在SPI_Init中运行时填充 */
+static HAL_DMA_Config_t s_spi1_dma_cfg = {
+    .stream      = LCD_DMA_INSTANCE,
+    .channel     = LCD_DMA_CHANNEL,
+    .clk         = LCD_DMA_CLK,
+    .periph_addr = 0,
+    .psize       = DMA_PeripheralDataSize_Byte,
+    .msize       = DMA_MemoryDataSize_Byte,
+    .irq_channel = LCD_DMA_IRQ_CHANNEL,
+    .irq_preempt = LCD_DMA_IRQ_PREEMPT,
+    .irq_sub     = LCD_DMA_IRQ_SUB,
+    .tc_cb       = st7789_dma_tc_cb,
+};
+
+void ST7789_SetFlushDoneCB(ST7789_FlushDone_cb_t cb)
+{
+    s_flush_done_cb = cb;
+}
+
+uint8_t ST7789_Flush_Start(const uint8_t *buf, uint32_t len)
+{
+    if (s_flush_sem == NULL)
+        return 0;
+    if (len == 0 || len > 65535u)          /* DMA NDTR为16位, 超长走阻塞回退 */
+        return 0;
+
+    /* 排空上次完成遗留的令牌(上次TC后可能未被Wait消费),
+     * 此刻DMA必已停止, 无新TC竞态 */
+    xSemaphoreTake(s_flush_sem, 0);
+
+    s_flush_active = 1;                    /* 先置位再启动, 防短传输TC先到 */
+    if (HAL_DMA_TxStart(buf, (uint16_t)len) == 0)
+    {
+        s_flush_active = 0;
+        return 0;
+    }
+    return 1;
+}
+
+void ST7789_Flush_Wait(void)
+{
+    if (s_flush_sem == NULL || !s_flush_active)
+        return;
+
+    /* 超时自恢复: 4800B@5.25MB/s约1ms, 100ms远超正常传输;
+     * 超时视为DMA故障, 强制清标志让下次刷新重试 */
+    if (xSemaphoreTake(s_flush_sem, pdMS_TO_TICKS(100)) != pdTRUE)
+    {
+        s_flush_active = 0;
+        printf("LCD DMA timeout!\r\n");
+    }
+}
+
+/* DMA2流3中断向量函数: 转调HAL层通用中断处理 */
+void DMA2_Stream3_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler();
+}
+
 /* -------------------- 初始化(经HAL层) -------------------- */
 static void ST7789_SPI_Init(void)
 {
     HAL_SPI_Init(&s_spi1_cfg);
+
+    /* 刷屏DMA通路: 创建完成信号量 + 配置DMA流 + 打开SPI的TXE DMA请求
+     * (流未使能时阻塞发送照常轮询TXE, 两者互不干扰) */
+    s_flush_sem    = xSemaphoreCreateBinary();
+    s_flush_active = 0;
+    if (s_flush_sem == NULL)
+    {
+        /* 堆耗尽: DMA通路不可用, Flush_Start/Wait的NULL检查
+         * 会令上层自动回退阻塞发送 */
+        printf("LCD flush sem create failed!\r\n");
+        return;
+    }
+    s_spi1_dma_cfg.periph_addr = (uint32_t)&LCD_SPI_INSTANCE->DR;
+    HAL_DMA_Init(&s_spi1_dma_cfg);
+    HAL_SPI_EnableTxDMA(LCD_SPI_INSTANCE, 1);
 }
 
 static void ST7789_GPIO_Init(void)

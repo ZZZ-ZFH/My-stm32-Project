@@ -68,3 +68,9 @@ void HAL_SPI_SendBuffer(SPI_TypeDef *spi, const uint8_t *buf, uint32_t len)
         /* 末尾等待移位完成 */
     }
 }
+
+void HAL_SPI_EnableTxDMA(SPI_TypeDef *spi, uint8_t enable)
+{
+    SPI_I2S_DMACmd(spi, SPI_I2S_DMAReq_Tx,
+                   (enable != 0) ? ENABLE : DISABLE);
+}

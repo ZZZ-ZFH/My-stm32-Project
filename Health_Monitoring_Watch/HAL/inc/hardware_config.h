@@ -104,6 +104,14 @@
 #define LCD_BLK_PIN     GPIO_Pin_2
 #define LCD_BLK_GPIO_CLK   RCC_AHB1Periph_GPIOA
 
+/* LCD刷屏DMA: SPI1_TX = DMA2_Stream3/通道3(F407固定映射), 单次传输+TC中断 */
+#define LCD_DMA_INSTANCE       DMA2_Stream3
+#define LCD_DMA_CLK            RCC_AHB1Periph_DMA2
+#define LCD_DMA_CHANNEL        DMA_Channel_3
+#define LCD_DMA_IRQ_CHANNEL    DMA2_Stream3_IRQn
+#define LCD_DMA_IRQ_PREEMPT    5     /* =FreeRTOS临界值5, TC中断使用FromISR */
+#define LCD_DMA_IRQ_SUB        0
+
 /* ==================== 7. 触摸 CST816 (模拟I2C) ==================== */
 #define TP_I2C_SDA_PORT     GPIOB
 #define TP_I2C_SDA_PIN      GPIO_Pin_9      /* PB9 数据线 */

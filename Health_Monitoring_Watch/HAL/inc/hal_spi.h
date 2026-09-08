@@ -34,6 +34,7 @@ void HAL_SPI_Init(const HAL_SPI_Config_t *cfg);                    /* 初始化S
 void HAL_SPI_SendByte(SPI_TypeDef *spi, uint8_t data);             /* 单字节完全完成(含BSY等待) */
 void HAL_SPI_SendBuffer(SPI_TypeDef *spi,
                         const uint8_t *buf, uint32_t len);         /* 批量发送, 末尾等BSY */
+void HAL_SPI_EnableTxDMA(SPI_TypeDef *spi, uint8_t enable);        /* TX的DMA请求使能: 1=交给DMA, 0=收回 */
 
 #ifdef __cplusplus
 }
