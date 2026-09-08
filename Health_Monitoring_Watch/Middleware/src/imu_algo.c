@@ -301,12 +301,15 @@ void IMU_Alg_GetResult(imu_result_t *result)
     *result = alg_result;
 }
 
-/* ============================================================
- *                 硬件桥接层(依赖HAL, 可整体替换)
- *  后续封装BSP: 将此区域替换为 bsp_imu.c 的接口调用即可
- * ============================================================ */
+/* 设置步数初值(掉电恢复: 从备份寄存器灌回当日累计步数) */
+void IMU_Alg_SetSteps(uint32_t steps)
+{
+    alg_result.steps = steps;
+}
+
+
 #include "icm20602.h"
-#include "delay.h"
+
 
 /* 量程换算: 默认配置±2g/±250dps (16384 LSB/g, 131 LSB/(deg/s)) */
 #define ACCEL_LSB_PER_G    16384.0f

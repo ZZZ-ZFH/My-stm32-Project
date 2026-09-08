@@ -1,7 +1,7 @@
 #ifndef __APP_UI_H
 #define __APP_UI_H
 
-#include "stm32f4xx.h"
+#include <stdint.h>
 
 /* ==================== API ==================== */
 /* 创建UI全部页面并加载主页(page_home):
@@ -13,6 +13,10 @@ void APP_UI_Init(void);
  * 内部仅写共享变量, 由LVGL任务内的定时器刷新到界面 */
 void APP_UI_SetHealthData(int32_t heart_rate, int8_t hr_valid,
                           int32_t spo2, int8_t spo2_valid);
+
+/* 读取最新健康数据(线程安全): 供蓝牙应答手机查询 */
+void APP_UI_GetHealthData(int32_t *heart_rate, int8_t *hr_valid,
+                          int32_t *spo2, int8_t *spo2_valid);
 
 /* 更新步数(线程安全): 刷新page_home与步数详情页 */
 void APP_UI_SetSteps(uint32_t steps);

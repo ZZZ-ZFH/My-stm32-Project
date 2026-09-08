@@ -3,6 +3,7 @@
 模块资料/
 图片素材/
 watch_ui/
+分层模板/
 # ===== Keil MDK 编译中间文件 =====
 # 编译输出目录（整个目录忽略）
 Objects/
@@ -53,3 +54,7 @@ JLinkSettings.ini
 *.log.lock
 Thumbs.db
 Desktop.ini
+
+# ===== 调试备份目录与编译日志 =====
+_backup_*/
+build_log.txt

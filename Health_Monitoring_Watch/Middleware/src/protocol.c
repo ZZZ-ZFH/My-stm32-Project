@@ -1,5 +1,5 @@
-﻿#include "protocol.h"
-#include "uart1.h"
+#include "protocol.h"
+#include "bsp_uart.h"
 /* 计算累加和校验 */
 static uint8_t calc_checksum(const uint8_t *data, uint16_t len)
 {
@@ -148,27 +148,30 @@ void Protocol_SendDemo()
 	uint8_t out_buf[MAX_FRAME_LEN] = {0};
 	uint16_t frame_len = Protocol_Pack(out_buf, Cmd_DEVICE_LED0,ON, strlen(ON));
 	//发送
-	Uart1_SendStr(out_buf,frame_len);
+	BSP_UART_SendBuffer(out_buf,frame_len);
 }
 
 void Protocol_RecDemo()
 {
+	uint8_t rx_buf[MAX_FRAME_LEN] = {0};
+	uint16_t rx_len = 0;
+
 	while(1)
 	{
-		//判断是否为一帧数据
-		if(rx_flag)
-		{	
+		//判断是否为一帧数据(取到一帧的同时自动清空接收缓冲)
+		if(BSP_UART_GetRxFrame(rx_buf, &rx_len))
+		{
 			printf("rx_buf:");
-			for(int i=0; i<rx_index; i++)
+			for(uint16_t i=0; i<rx_len; i++)
 			{
 				printf("%#x\t",rx_buf[i]);
 			}
 			printf("\r\n");
-			
+
 			ProtocolFrame frame;
 			memset(&frame,0,sizeof(frame));
 			//解析
-			int8_t ret = Protocol_Parse_Frame(rx_buf,rx_index,&frame);
+			int8_t ret = Protocol_Parse_Frame(rx_buf,rx_len,&frame);
 			if(ret==0)
 			{
 				switch(frame.cmd)
@@ -176,11 +179,11 @@ void Protocol_RecDemo()
 					case Cmd_DEVICE_LED0:
 						if(strcmp(frame.data,ON)==0)
 						{
-							//LED0(0);
+							//BSP_LED_On(BSP_LED_1);
 						}
 						else if(strcmp(frame.data,OFF)==0)
 						{
-							//LED0(1);
+							//BSP_LED_Off(BSP_LED_1);
 						}
 						break;
 					case Cmd_DEVICE_LED1:
@@ -193,11 +196,6 @@ void Protocol_RecDemo()
 						break;
 				}
 			}
-			
-			//清空
-			memset(rx_buf,0,sizeof(rx_buf));
-			rx_flag = 0;
-			rx_index = 0;
 		}
 	}
 }

@@ -338,7 +338,7 @@
               <MiscControls></MiscControls>
               <Define>USE_STDPERIPH_DRIVER,STM32F40_41xxx,LV_LVGL_H_INCLUDE_SIMPLE</Define>
               <Undefine></Undefine>
-              <IncludePath>..\USER;..\CORE;..\FWLIB\inc;..\FreeRTOS\include;..\FreeRTOS\portable\RVDS\ARM_CM4F;..\LVGL;..\LVGL\src;..\LVGL\examples\porting;..\HAL\inc;..\APP\inc;..\Middleware\inc</IncludePath>
+              <IncludePath>..\USER;..\CORE;..\FWLIB\inc;..\FreeRTOS\include;..\FreeRTOS\portable\RVDS\ARM_CM4F;..\LVGL;..\LVGL\src;..\LVGL\examples\porting;..\HAL\inc;..\BSP\inc;..\APP\inc;..\Middleware\inc;..\Common\inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -503,59 +503,99 @@
           <GroupName>HAL</GroupName>
           <Files>
             <File>
-              <FileName>beep.c</FileName>
+              <FileName>hal_gpio.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\HAL\src\beep.c</FilePath>
+              <FilePath>..\HAL\src\hal_gpio.c</FilePath>
             </File>
             <File>
-              <FileName>cst816.c</FileName>
+              <FileName>hal_led.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\HAL\src\cst816.c</FilePath>
+              <FilePath>..\HAL\src\hal_led.c</FilePath>
             </File>
             <File>
-              <FileName>dx24.c</FileName>
+              <FileName>hal_uart.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\HAL\src\dx24.c</FilePath>
+              <FilePath>..\HAL\src\hal_uart.c</FilePath>
             </File>
             <File>
-              <FileName>led.c</FileName>
+              <FileName>hal_tim.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\HAL\src\led.c</FilePath>
+              <FilePath>..\HAL\src\hal_tim.c</FilePath>
             </File>
             <File>
-              <FileName>max30102.c</FileName>
+              <FileName>hal_spi.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\HAL\src\max30102.c</FilePath>
+              <FilePath>..\HAL\src\hal_spi.c</FilePath>
             </File>
             <File>
-              <FileName>protocol.c</FileName>
+              <FileName>hal_rtc.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Middleware\src\protocol.c</FilePath>
+              <FilePath>..\HAL\src\hal_rtc.c</FilePath>
             </File>
             <File>
-              <FileName>rtc.c</FileName>
+              <FileName>hal_delay.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\HAL\src\rtc.c</FilePath>
+              <FilePath>..\HAL\src\hal_delay.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>BSP</GroupName>
+          <Files>
+            <File>
+              <FileName>bsp_led.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\src\bsp_led.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_beep.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\src\bsp_beep.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\src\bsp_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_rtc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\src\bsp_rtc.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_pwr.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\src\bsp_pwr.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_lvgl_tick.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\src\bsp_lvgl_tick.c</FilePath>
             </File>
             <File>
               <FileName>st7789.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\HAL\src\st7789.c</FilePath>
+              <FilePath>..\BSP\src\st7789.c</FilePath>
             </File>
             <File>
-              <FileName>tim3.c</FileName>
+              <FileName>cst816.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\HAL\src\tim3.c</FilePath>
-            </File>
-            <File>
-              <FileName>uart1.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\HAL\src\uart1.c</FilePath>
+              <FilePath>..\BSP\src\cst816.c</FilePath>
             </File>
             <File>
               <FileName>icm20602.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\HAL\src\icm20602.c</FilePath>
+              <FilePath>..\BSP\src\icm20602.c</FilePath>
+            </File>
+            <File>
+              <FileName>max30102.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\src\max30102.c</FilePath>
+            </File>
+            <File>
+              <FileName>dx24.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\src\dx24.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -1675,6 +1715,11 @@
               <FileType>1</FileType>
               <FilePath>..\APP\src\app_ui.c</FilePath>
             </File>
+            <File>
+              <FileName>app_ble.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\src\app_ble.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1746,19 +1791,49 @@
               <FilePath>..\Middleware\src\imu_algo.c</FilePath>
             </File>
             <File>
-              <FileName>delay.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Middleware\src\delay.c</FilePath>
-            </File>
-            <File>
-              <FileName>algorithm.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Middleware\src\algorithm.c</FilePath>
-            </File>
-            <File>
               <FileName>protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Middleware\src\protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>uart_log.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middleware\src\uart_log.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_sys.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middleware\src\svc_sys.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_rtc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middleware\src\svc_rtc.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_health.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middleware\src\svc_health.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_bt.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middleware\src\svc_bt.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_display.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middleware\src\svc_display.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Common</GroupName>
+          <Files>
+            <File>
+              <FileName>algorithm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Common\src\algorithm.c</FilePath>
             </File>
           </Files>
         </Group>

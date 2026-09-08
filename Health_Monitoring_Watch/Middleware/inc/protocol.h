@@ -43,7 +43,13 @@ typedef enum {
 	Cmd_DEVICE_LED1,
 	Cmd_DEVICE_LED2,
 	Cmd_DEVICE_LED3,
-	Cmd_DEVICE_BEEP,	
+	Cmd_DEVICE_BEEP,
+	Cmd_SET_TIME,        /* 手机设置时间: data=[时,分,秒] */
+	Cmd_SET_DATE,        /* 手机设置日期: data=[年(0-99),月,日] */
+	Cmd_SET_ALARM,       /* 手机设置闹钟: data=[时,分] */
+	Cmd_GET_HEALTH,      /* 手机查询心率血氧: 无data,
+	                      * 应答data=[hr有效,心率,血氧有效,血氧] */
+	Cmd_ACK,             /* 设备应答: data=[原命令字,错误码(0=成功)] */
 }Cmd;
 
 #define ON		"1"

@@ -1,86 +1,88 @@
 /**
  * @file    app_task.c
  * @brief   FreeRTOS 任务集中管理: 任务创建与任务函数
- *          app_task1 : 启动/初始化(硬件初始化+创建子任务+运行指示灯)
+ *          硬件访问统一经Middleware服务层(svc_*), APP不直接触碰BSP/HAL
+ *          app_task1 : 启动/初始化(系统服务+创建子任务+运行指示灯)
  *          user_task1: LVGL 界面任务
- *          max30102_task: 心率血氧采集任务(纯中断驱动, 无轮询)
- *          dx24_task: 蓝牙接收任务(USART6空闲中断唤醒, 串口打印)
- *          icm20602_task: IMU算法任务(Middleware姿态解算+计步, 桥接HAL采集)
+ *          max30102_task: 心率血氧采集任务(svc_health服务)
+ *          dx24_task: 蓝牙接收任务(svc_bt服务, USART6空闲中断唤醒)
+ *          icm20602_task: IMU算法任务(Middleware姿态解算+计步)
  */
 #include "app_task.h"
 
-#include "stm32f4xx.h"
 #include "stdio.h"
-#include "string.h"
 
 #include "lvgl.h"
 #include "lv_port_disp.h"
 #include "lv_port_indev.h"
 
 #include "app_ui.h"
-
-#include "tim3.h"
-#include "led.h"
-#include "uart1.h"
-#include "max30102.h"
-#include "dx24.h"
+#include "app_ble.h"
 #include "imu_algo.h"
-#include "st7789.h"
-#include "rtc.h"
+
+#include "svc_sys.h"         /* 系统服务: LED/串口/蜂鸣器/睡眠/节拍 */
+#include "svc_rtc.h"         /* RTC服务: 时间/日期/闹钟/步数保存 */
+#include "svc_health.h"      /* 健康服务: 心率/血氧 */
+#include "svc_bt.h"          /* 蓝牙服务: 收发/连接状态 */
+#include "svc_display.h"     /* 显示服务: 背光亮度 */
 
 /* 任务句柄(创建后仅调试器线程感知使用, 不对外暴露) */
-static TaskHandle_t app_task1_handle     = NULL;
-static TaskHandle_t user_task1_handle     = NULL;
+static TaskHandle_t app_task_handle     = NULL;
+static TaskHandle_t user_task_handle     = NULL;
 static TaskHandle_t max30102_task_handle = NULL;
 static TaskHandle_t dx24_task_handle     = NULL;
 static TaskHandle_t icm20602_task_handle  = NULL;
 
-static void app_task1(void* pvParameters);
-static void user_task1(void* pvParameters);
+static void app_task(void* pvParameters);
+static void user_task(void* pvParameters);
 static void max30102_task(void* pvParameters);
 static void dx24_task(void* pvParameters);
 static void icm20602_task(void* pvParameters);
 
+static QueueHandle_t mutex_semphore_handle;
 void APP_Task_Init(void)
 {
-	xTaskCreate((TaskFunction_t )app_task1,           // 任务入口函数
-			  (const char*    )"app_task1",           // 任务名字
+	xTaskCreate((TaskFunction_t )app_task,           // 任务入口函数
+			  (const char*    )"app_task",           // 任务名字
 			  (uint16_t       )512,                   // 任务栈大小  字为单位
 			  (void*          )NULL,                  // 任务入口函数参数
 			  (UBaseType_t    )4,                     // 任务的优先级 数字越大 优先级越高
-			  (TaskHandle_t*  )&app_task1_handle);    // 任务控制块指针
+			  (TaskHandle_t*  )&app_task_handle);    // 任务控制块指针
 }
 
-static void app_task1(void* pvParameters)
+static void app_task(void* pvParameters)
 {
-	//硬件初始化
-	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_4); //中断优先级分组 4
-	LED_Init();
-	Uart1_Init(9600);
-	printf("Uart1_Init\r\n");
-
+	//硬件初始化(系统服务: 中断分组+LED+调试串口+蜂鸣器)
+	SVC_SYS_Init();
+	printf("SVC_SYS_Init\r\n");
+	/* 创建互斥信号量，并且主动释放一次信号量 */
+    mutex_semphore_handle = xSemaphoreCreateMutex();
+	 if (mutex_semphore_handle != NULL)
+    {
+        printf("互斥信号量创建成功\r\n");
+    }
 	// RTC初始化(LSE启动需等待稳定, 首次上电装入编译时刻, 之后VBAT保持走时)
-	Rtc_Init();
+	SVC_RTC_Init();
 	{
 		uint8_t h, m, s;
-		Rtc_GetTime(&h, &m, &s);
+		SVC_RTC_GetTime(&h, &m, &s);
 		printf("RTC: %02d:%02d:%02d\r\n", h, m, s);
 	}
 
 	// 创建user_task1任务  LVGL
-	xTaskCreate((TaskFunction_t )user_task1,
-			  (const char*    )"task1",
+	xTaskCreate((TaskFunction_t )user_task,
+			  (const char*    )"user_task",
 			  (uint16_t       )2048,
 			  (void*          )NULL,
 			  (UBaseType_t   )4,
-			  (TaskHandle_t*  )&user_task1_handle);
+			  (TaskHandle_t*  )&user_task_handle);
 
 	// 创建max30102_task任务  心率血氧传感器(软件I2C PC8=SDA PC9=SCL PA15=INT)
 	xTaskCreate((TaskFunction_t )max30102_task,
 			  (const char*    )"max30102",
 			  (uint16_t       )512,
 			  (void*          )NULL,
-			  (UBaseType_t   )3,
+			  (UBaseType_t   )4,
 			  (TaskHandle_t*  )&max30102_task_handle);
 
 	// 创建dx24_task任务  蓝牙模块(USART6 PC6-TX PC7-RX, 空闲中断唤醒)
@@ -102,19 +104,25 @@ static void app_task1(void* pvParameters)
     while(1)
     {
 		// 任务状态正常运行的指示灯
-        GPIO_ToggleBits(GPIOF, GPIO_Pin_9);
+        SVC_SYS_LedToggle();
 
         vTaskDelay(1000);
     }
 }
 
-static void user_task1(void* pvParameters)
+/* LVGL心跳回调: 系统节拍每1ms调用(中断上下文, 注入svc_sys) */
+static void lvgl_tick_cb(void)
+{
+	lv_tick_inc(1);
+}
+
+static void user_task(void* pvParameters)
 {
 	// LVGL 初始化: 显示(ST7789 240x300) + 触摸(CST816) + 1ms tick
 	lv_init();
 	lv_port_disp_init();
 	lv_port_indev_init();
-	TIM3_Init();
+	SVC_SYS_TickInit(lvgl_tick_cb);   /* 节拍回调注入, 驱动LVGL心跳 */
 
 	APP_UI_Init();         // 应用层UI: 健康监测表盘(心率+血氧)
 
@@ -125,30 +133,32 @@ static void user_task1(void* pvParameters)
 	}
 }
 
-// MAX30102 心率血氧任务: INT(PA15)FIFO将满唤醒+100ms兜底,
+// MAX30102 心率血氧任务: 100ms周期轮询FIFO(无中断),
 // 采样缓冲在驱动内部(静态分配), 每满500样本(5秒)计算一次,
-// 内置接触检测(IR直流阈值)与生理范围过滤, 无手指时valid=0
+// 内置接触检测(IR直流阈值)与生理范围过滤, 无手指时valid=0;
+// 初始化失败不删任务: 空轮检测自动重连(2s周期)
 static void max30102_task(void* pvParameters)
 {
-	max30102_result_t result;
+	svc_health_result_t result;
 
-	/* 先注册INT事件接收任务, 再初始化(Init内部使能EXTI) */
-	MAX30102_SetNotifyTask(xTaskGetCurrentTaskHandle());
-
-	if (MAX30102_Init() == 0)
+	if (SVC_HEALTH_Init() == 0)
 	{
-		printf("MAX30102 init failed! Check PC8=SDA PC9=SCL PA15=INT\r\n");
-		vTaskDelete(NULL);   // 删除自身
+		/* 上电时模块可能未就绪(拔电重插场景): 不删除任务,
+		 * 采样循环检测到空轮后自动重连(2s周期) */
+		printf("MAX30102 init failed! Check PC8=SDA PC9=SCL, auto retry\r\n");
 	}
-	printf("MAX30102 init OK\r\n");
+	else
+	{
+		printf("MAX30102 init OK\r\n");
+	}
 
 	while(1)
 	{
-		/* 中断唤醒为主, 100ms超时兜底: 覆盖100sps采样不溢出FIFO32,
-		 * 且INT电平不稳(模块上拉1.8V)时保证数据不丢 */
-		MAX30102_WaitSampleEvent(100);
-
-		if (MAX30102_Process(&result) == 1)
+		/* 100ms轮询: 100sps采样下每轮约10个新样本,
+		 * FIFO深32(320ms)不溢出 */
+		vTaskDelay(pdMS_TO_TICKS(100));
+		xSemaphoreTake(mutex_semphore_handle,portMAX_DELAY);
+		if (SVC_HEALTH_Process(&result) == 1)
 		{
 			printf("HR=%d, HRvalid=%d, SpO2=%d, SpO2Valid=%d\r\n",
 			       (int)result.heart_rate, (int)result.hr_valid,
@@ -158,11 +168,12 @@ static void max30102_task(void* pvParameters)
 			APP_UI_SetHealthData(result.heart_rate, result.hr_valid,
 								 result.spo2, result.spo2_valid);
 		}
+		xSemaphoreGive(mutex_semphore_handle); 
 	}
 }
 
-// DX24蓝牙任务: USART6(PC6-TX PC7-RX)空闲中断唤醒接收数据并打印;
-// STATE脚(PA0)轮询连接状态(200ms周期+消抖), 变化时刷新UI蓝牙图标颜色
+// DX24蓝牙任务: 蓝牙服务帧到达唤醒接收处理;
+// STATE脚轮询连接状态(200ms周期+消抖), 变化时刷新UI蓝牙图标颜色
 static void dx24_task(void* pvParameters)
 {
 	uint8_t state_stable  = 0;   /* 消抖后的稳定连接状态 */
@@ -170,8 +181,8 @@ static void dx24_task(void* pvParameters)
 	uint8_t state_last    = 0;   /* 上一次原始读数 */
 
 	/* 先注册IDLE事件接收任务, 再初始化(Init内部使能中断) */
-	DX24_SetNotifyTask(xTaskGetCurrentTaskHandle());
-	DX24_Init(9600);
+	SVC_BT_SetNotifyTask(xTaskGetCurrentTaskHandle());
+	SVC_BT_Init();
 	printf("DX24 bluetooth uart init\r\n");
 
 	while(1)
@@ -179,19 +190,25 @@ static void dx24_task(void* pvParameters)
 		/* 等待一帧数据到达, 最多阻塞200ms后轮询STATE脚 */
 		ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200));
 
-		if(dx_rx_flag == 1)
 		{
-			/* 打印本帧蓝牙数据(缓冲区自带'\0'终止符) */
-			printf("BT RX(%d): %s\r\n", (int)dx_rx_len, (char*)dx_rx_buf);
+			/* 取一帧到本地再处理: 处理期间新帧到达只覆盖共享缓冲,
+			 * 不影响本帧; 128字节在dx24任务栈(2KB)内可承受 */
+			uint8_t  frame_buf[SVC_BT_RX_BUF_LEN];
+			uint16_t frame_len = 0;
 
-			memset(dx_rx_buf, 0, sizeof(dx_rx_buf));
-			dx_rx_len  = 0;
-			dx_rx_flag = 0;
+			if (SVC_BT_GetFrame(frame_buf, &frame_len))
+			{
+				frame_buf[frame_len] = '\0';   /* 兼容字符串打印 */
+				printf("BT RX(%d): %s\r\n", (int)frame_len, (char*)frame_buf);
+
+				/* 文本命令分发: 手机设置时间/日期, 查询心率血氧/日期/时间 */
+				APP_BLE_Process((char *)frame_buf);
+			}
 		}
 
 		/* 连接状态消抖: 连续3次(约600ms)读数一致才切换 */
 		{
-			uint8_t state_raw = DX24_IsConnected();
+			uint8_t state_raw = SVC_BT_IsConnected();
 
 			if(state_raw != state_last)
 			{
@@ -220,12 +237,24 @@ static void dx24_task(void* pvParameters)
 #define WRIST_SCREEN_TIMEOUT_MS   20000u      /* 无操作熄屏时间(触摸/抬手重置) */
 
 volatile uint8_t g_screen_off = 0;   /* 熄屏标志: 空闲钩子据此让CPU进睡眠模式 */
+volatile uint8_t g_force_screen_on = 0; /* 强制亮屏请求(闹钟弹窗等置位, 本任务消费) */
+
+/* 强制亮屏(任意任务上下文可调): 立即点亮背光并退出CPU睡眠,
+ * 熄屏计时由icm20602_task同步重置(弹窗显示期间不会超时熄屏) */
+void APP_Task_ForceScreenOn(void)
+{
+	SVC_DISPLAY_SetBacklight(100);
+	g_screen_off      = 0;
+	g_force_screen_on = 1;
+}
 
 static void icm20602_task(void* pvParameters)
 {
 	imu_result_t result;
 	uint8_t  screen_on   = 1;                 /* 开机默认亮屏 */
 	uint32_t screen_ms   = 0;                 /* 上次亮屏/交互时刻 */
+	uint32_t steps_last  = 0;                 /* 上次保存的步数 */
+	uint8_t  sday_y = 0, sday_m = 0, sday_d = 0; /* 步数所属日期 */
 
 	if (IMU_Alg_Init() == 0)
 	{
@@ -233,6 +262,23 @@ static void icm20602_task(void* pvParameters)
 		vTaskDelete(NULL);   // 删除自身
 	}
 	printf("IMU algo init OK\r\n");
+
+	/* 当日步数掉电恢复: 备份寄存器日期==今天则灌回, 否则从0开始 */
+	{
+		uint8_t y, m, d;
+		uint32_t steps;
+
+		if (SVC_RTC_LoadSteps(&steps, &y, &m, &d))
+		{
+			SVC_RTC_GetDate(&sday_y, &sday_m, &sday_d);
+			if (y == sday_y && m == sday_m && d == sday_d)
+			{
+				IMU_Alg_SetSteps(steps);
+				steps_last = steps;
+				printf("Steps restored: %u\r\n", (unsigned)steps);
+			}
+		}
+	}
 
 	while(1)
 	{
@@ -242,12 +288,46 @@ static void icm20602_task(void* pvParameters)
 		/* 步数推送到应用层UI(线程安全: 内部仅写共享变量) */
 		APP_UI_SetSteps((uint32_t)result.steps);
 
+		/* 步数掉电保存: 变化即存(备份寄存器写无磨损);
+		 * 跨天(或用户改日期)时从0重新计并更新保存日期 */
+		if (result.steps != steps_last)
+		{
+			uint8_t y, m, d;
+
+			SVC_RTC_GetDate(&y, &m, &d);
+			if (y != sday_y || m != sday_m || d != sday_d)
+			{
+				sday_y = y; sday_m = m; sday_d = d;
+				if (steps_last != 0)   /* 非启动首次保存: 跨天, 步数重计 */
+				{
+					IMU_Alg_SetSteps(0);
+					result.steps = 0;
+					APP_UI_SetSteps(0);
+					printf("New day, steps reset\r\n");
+				}
+			}
+			steps_last = result.steps;
+			SVC_RTC_SaveSteps(steps_last, sday_y, sday_m, sday_d);
+		}
+
+		/* 强制亮屏请求(闹钟弹窗): 同步熄屏计时, 防弹窗期间超时熄屏 */
+		if (g_force_screen_on)
+		{
+			g_force_screen_on = 0;
+			if (!screen_on)
+			{
+				screen_on = 1;
+				printf("Force -> screen ON\r\n");
+			}
+			screen_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+		}
+
 		/* 触摸活动 -> 亮屏并重置熄屏计时(点击/滑动期间不熄屏) */
 		if (APP_UI_ConsumeTouchActivity())
 		{
 			if (!screen_on)
 			{
-				ST7789_Set_Backlight(100);
+				SVC_DISPLAY_SetBacklight(100);
 				screen_on = 1;
 				g_screen_off = 0;      /* 唤醒CPU退出睡眠模式 */
 				printf("Touch -> screen ON\r\n");
@@ -260,7 +340,7 @@ static void icm20602_task(void* pvParameters)
 		{
 			if (!screen_on)
 			{
-				ST7789_Set_Backlight(100);
+				SVC_DISPLAY_SetBacklight(100);
 				screen_on = 1;
 				g_screen_off = 0;      /* 唤醒CPU退出睡眠模式 */
 				printf("Wrist raise -> screen ON\r\n");
@@ -274,7 +354,7 @@ static void icm20602_task(void* pvParameters)
 			uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
 			if (now - screen_ms > WRIST_SCREEN_TIMEOUT_MS)
 			{
-				ST7789_Set_Backlight(0);
+				SVC_DISPLAY_SetBacklight(0);
 				screen_on = 0;
 				g_screen_off = 1;
 				printf("Timeout -> screen OFF + CPU sleep\r\n");
@@ -295,7 +375,6 @@ void vApplicationIdleHook(void)
 {
 	if (g_screen_off)
 	{
-		SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;   /* 睡眠模式(浅睡), 非深度睡眠 */
-		__WFI();                              /* 等待中断: CPU暂停, 中断唤醒后继续 */
+		SVC_SYS_EnterSleep();   /* CPU睡眠(平台相关指令封装于服务层) */
 	}
 }

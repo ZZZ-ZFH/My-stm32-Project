@@ -19,9 +19,10 @@
  * @note    图片资源在 LVGL/image/ (100x100, LVGL8 C数组);
  */
 #include "app_ui.h"
+#include "app_task.h"   /* APP_Task_ForceScreenOn: 闹钟弹窗亮屏 */
 #include "lvgl.h"
 #include <stdio.h>
-#include "rtc.h"
+#include "svc_rtc.h"
 
 /* ==================== 布局参数(屏幕240x300) ==================== */
 #define UI_SCREEN_W         240
@@ -47,13 +48,10 @@ static volatile uint8_t  s_bt_connected;      /* 蓝牙连接状态(0=断开) */
 static volatile uint8_t  s_touch_activity;    /* 触摸活动标志(熄屏计时保活) */
 
 /* ==================== 外部图片资源(LVGL/image/) ==================== */
+/* 屏蔽待开发功能: 通知/游戏/电话/移动数据图标暂不编译(Keil LVGL_IMAGE组) */
 LV_IMG_DECLARE(image_bluetooth_line);   /* 25x25 蓝牙图标(TRUE_COLOR黑底) */
-LV_IMG_DECLARE(image_mobile_data);      /* 25x20 移动数据图标(TRUE_COLOR黑底) */
 LV_IMG_DECLARE(image_blood_oxygen);     /* 100x100 血氧图标(TRUE_COLOR黑底) */
 LV_IMG_DECLARE(image_heart_rate);       /* 100x100 心率图标(TRUE_COLOR黑底) */
-LV_IMG_DECLARE(image_notification);     /* 100x100 通知图标 */
-LV_IMG_DECLARE(image_game);             /* 100x100 游戏图标 */
-LV_IMG_DECLARE(image_phone);            /* 100x100 电话图标 */
 LV_IMG_DECLARE(image_setting);          /* 100x100 设置图标 */
 LV_IMG_DECLARE(image_standby);          /* 100x100 待机图标 */
 LV_IMG_DECLARE(image_steps);            /* 100x100 步数图标 */
@@ -63,10 +61,7 @@ LV_IMG_DECLARE(image_time);             /* 100x100 时间图标 */
 enum {
     APP_BLOOD_OXYGEN = 0,   /* 血氧 */
     APP_HEART_RATE,         /* 心率 */
-    APP_NOTIFICATION,       /* 通知 */
-    APP_GAME,               /* 游戏 */
-    APP_PHONE,              /* 电话 */
-    APP_SETTING,            /* 设置 */
+    APP_SETTING,            /* 设置(日期设置页) */
     APP_STANDBY,            /* 待机 */
     APP_STEPS,              /* 步数 */
     APP_TIME,               /* 时间 */
@@ -88,10 +83,7 @@ static app_detail_t s_app[APP_NUM] = {
     /* title          value      icon                  zoom  detail page  label_value */
     { "blood oxygen", "98 %",    &image_blood_oxygen,  256,  1,     NULL, NULL },
     { "heart rate",   "72 bpm",  &image_heart_rate,    256,  1,     NULL, NULL },
-    { "notification", "3 new",   &image_notification,  256,  0,     NULL, NULL },
-    { "game",         "2",       &image_game,          256,  0,     NULL, NULL },
-    { "phone",        "5 calls", &image_phone,         256,  0,     NULL, NULL },
-    { "setting",      "ON",      &image_setting,       256,  1,     NULL, NULL },
+    { "date setting", "date",    &image_setting,       256,  1,     NULL, NULL },
     { "standby",      "OFF",     &image_standby,       256,  0,     NULL, NULL },
     { "steps",        "8543",    &image_steps,         256,  1,     NULL, NULL },
     { "time",         "11:00",   &image_time,          256,  1,     NULL, NULL },
@@ -103,7 +95,6 @@ static struct {
     lv_obj_t *container_home;             /* 原Page_1_container_home: 主页布局容器 */
     lv_obj_t *container_status_spacer;    /* 原Page_1_obj_2: 状态栏上方占位 */
     lv_obj_t *container_status_bar;       /* 原Page_1_obj_1: 顶部状态栏(图标行) */
-    lv_obj_t *img_mobile_data;             /* 原Page_1_image_1: 移动数据图标 */
     lv_obj_t *img_bluetooth;              /* 原Page_1_image_2: 蓝牙状态图标 */
     lv_obj_t *card_time_info;             /* 原Page_1_card_time_info: 日期时间卡片 */
     lv_obj_t *label_date;
@@ -135,6 +126,16 @@ void APP_UI_SetHealthData(int32_t heart_rate, int8_t hr_valid,
     s_spo2_valid = spo2_valid;
 }
 
+/* 读取最新健康数据(供蓝牙应答手机查询, 32位对齐读为原子操作) */
+void APP_UI_GetHealthData(int32_t *heart_rate, int8_t *hr_valid,
+                          int32_t *spo2, int8_t *spo2_valid)
+{
+    if (heart_rate) *heart_rate = s_hr;
+    if (hr_valid)   *hr_valid   = s_hr_valid;
+    if (spo2)       *spo2       = s_spo2;
+    if (spo2_valid) *spo2_valid = s_spo2_valid;
+}
+
 void APP_UI_SetSteps(uint32_t steps)
 {
     s_steps = steps;
@@ -163,6 +164,8 @@ uint8_t APP_UI_ConsumeTouchActivity(void)
 /* ==================== 页面导航 ====================
  * 页面懒创建+带动画切换(auto_del=false: 页面常驻, 切换不销毁) */
 static void create_detail_page(int idx);   /* 前向声明(懒创建) */
+static void setting_page_enter(void);      /* 前向声明(进入刷新) */
+static void time_page_enter(void);         /* 前向声明(进入刷新) */
 
 static void show_page_home(void)
 {
@@ -195,6 +198,14 @@ static void show_detail_page(int idx)
         return;
     if (s_app[idx].page == NULL)
         create_detail_page(idx);
+    else
+    {
+        /* 已创建的编辑型页面: 进入时重新加载RTC当前值 */
+        if (idx == APP_SETTING)
+            setting_page_enter();
+        else if (idx == APP_TIME)
+            time_page_enter();
+    }
     lv_scr_load_anim(s_app[idx].page, LV_SCR_LOAD_ANIM_OVER_RIGHT,
                      UI_ANIM_TIME_MS, 0, false);
 }
@@ -304,16 +315,8 @@ static void create_page_home(void)
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_size(ui.container_status_bar, 220, 50);
 
-    /* img_mobile_data(原Page_1_image_1): 移动数据图标(chroma keyed, recolor灰色;
-     * 连接状态切换暂未接入, 之后接入时改recolor即可) */
-    ui.img_mobile_data = lv_img_create(ui.container_status_bar);
-    lv_img_set_src(ui.img_mobile_data, &image_mobile_data);
-    lv_obj_set_style_bg_opa(ui.img_mobile_data, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(ui.img_mobile_data, 0, 0);
-    lv_obj_set_style_img_recolor(ui.img_mobile_data, UI_BT_COLOR_OFF, 0);
-    lv_obj_set_style_img_recolor_opa(ui.img_mobile_data, LV_OPA_COVER, 0);
-
-    /* img_bluetooth(原Page_1_image_2): 蓝牙图标, recolor着色(灰=断开/蓝=已连接) */
+    /* img_bluetooth(原Page_1_image_2): 蓝牙图标, recolor着色(灰=断开/蓝=已连接)
+     * (移动数据图标已随电话/短信功能屏蔽, 恢复时重新创建于状态栏) */
     ui.img_bluetooth = lv_img_create(ui.container_status_bar);
     lv_img_set_src(ui.img_bluetooth, &image_bluetooth_line);
     lv_obj_set_style_bg_opa(ui.img_bluetooth, LV_OPA_TRANSP, 0);
@@ -334,7 +337,7 @@ static void create_page_home(void)
         /* 日期初值取RTC(之后由时钟定时器在日期变更时刷新) */
         uint8_t year, month, day;
         char dbuf[24];
-        Rtc_GetDate(&year, &month, &day);
+        SVC_RTC_GetDate(&year, &month, &day);
         s_date_day_shown = day;
         snprintf(dbuf, sizeof(dbuf), "20%02d - %d - %d",
                  (int)year, (int)month, (int)day);
@@ -350,7 +353,7 @@ static void create_page_home(void)
     {
         uint8_t h, m, s;
         char tbuf[24];
-        Rtc_GetTime(&h, &m, &s);
+        SVC_RTC_GetTime(&h, &m, &s);
         snprintf(tbuf, sizeof(tbuf), "%02d : %02d : %02d",
                  (int)h, (int)m, (int)s);
         lv_label_set_text(ui.label_time, tbuf);
@@ -466,12 +469,480 @@ static void create_page_menu(void)
     }
 }
 
-/* ==================== 详情页构建(懒创建) ====================
- * 结构: 全屏flex列居中(100x100图标 + 标题 + 数值), 左滑回菜单 */
-static void create_detail_page(int idx)
+/* ==================== setting详情页(日期设置, 懒创建) ====================
+ * 结构: 全屏flex列居中(标题 + 年/月/日三行[- 值 +] + 保存按钮)
+ * 无应用图标(用户要求: 日期设置界面去掉图片)
+ * 保存后写RTC并同步刷新主页日期标签 */
+
+/* 编辑字段索引 */
+enum { SET_FIELD_YEAR = 0, SET_FIELD_MONTH, SET_FIELD_DAY, SET_FIELD_NUM };
+
+/* 日期编辑状态与控件句柄 */
+static uint8_t    s_set_val[SET_FIELD_NUM];            /* 年/月/日编辑值 */
+static lv_obj_t  *s_set_label_val[SET_FIELD_NUM];      /* 数值标签 */
+static lv_obj_t  *s_set_btn_save;                      /* 保存按钮 */
+
+/* 当月天数(年0-99对应20xx, 2000-2099均4年一闰) */
+static uint8_t set_days_in_month(uint8_t year, uint8_t month)
+{
+    static const uint8_t days[12] =
+        {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    if (month < 1 || month > 12)
+        return 31;
+    if (month == 2 && ((2000u + year) % 4u) == 0u)
+        return 29;
+    return days[month - 1];
+}
+
+/* 数值标签刷新 */
+static void set_label_refresh(void)
+{
+    char buf[12];
+
+    snprintf(buf, sizeof(buf), "20%02d", (int)s_set_val[SET_FIELD_YEAR]);
+    lv_label_set_text(s_set_label_val[SET_FIELD_YEAR], buf);
+    snprintf(buf, sizeof(buf), "%d", (int)s_set_val[SET_FIELD_MONTH]);
+    lv_label_set_text(s_set_label_val[SET_FIELD_MONTH], buf);
+    snprintf(buf, sizeof(buf), "%d", (int)s_set_val[SET_FIELD_DAY]);
+    lv_label_set_text(s_set_label_val[SET_FIELD_DAY], buf);
+}
+
+/* 调整字段值并夹取到合法范围(月份变化时日联动截断) */
+static void set_adjust(int field, int delta)
+{
+    switch (field)
+    {
+        case SET_FIELD_YEAR:
+            if (delta > 0 && s_set_val[SET_FIELD_YEAR] < 99)
+                s_set_val[SET_FIELD_YEAR]++;
+            else if (delta < 0 && s_set_val[SET_FIELD_YEAR] > 0)
+                s_set_val[SET_FIELD_YEAR]--;
+            break;
+        case SET_FIELD_MONTH:
+            if (delta > 0 && s_set_val[SET_FIELD_MONTH] < 12)
+                s_set_val[SET_FIELD_MONTH]++;
+            else if (delta < 0 && s_set_val[SET_FIELD_MONTH] > 1)
+                s_set_val[SET_FIELD_MONTH]--;
+            break;
+        case SET_FIELD_DAY:
+            if (delta > 0
+                && s_set_val[SET_FIELD_DAY] < set_days_in_month(
+                       s_set_val[SET_FIELD_YEAR], s_set_val[SET_FIELD_MONTH]))
+                s_set_val[SET_FIELD_DAY]++;
+            else if (delta < 0 && s_set_val[SET_FIELD_DAY] > 1)
+                s_set_val[SET_FIELD_DAY]--;
+            break;
+        default:
+            return;
+    }
+    /* 闰月切换后日可能超界(如3->2月31日), 联动截断 */
+    {
+        uint8_t max_day = set_days_in_month(s_set_val[SET_FIELD_YEAR],
+                                            s_set_val[SET_FIELD_MONTH]);
+        if (s_set_val[SET_FIELD_DAY] > max_day)
+            s_set_val[SET_FIELD_DAY] = max_day;
+    }
+    set_label_refresh();
+}
+
+/* [+]/[-]按钮回调: user_data编码 = field*2 + (delta>0?1:0) */
+static void set_btn_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED)
+    {
+        int code = (int)(intptr_t)lv_event_get_user_data(e);
+        set_adjust(code >> 1, (code & 1) ? 1 : -1);
+    }
+}
+
+/* 保存按钮: 写RTC并同步刷新主页日期标签 */
+static void set_save_btn_event_cb(lv_event_t *e)
+{
+    char buf[24];
+
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED)
+        return;
+
+    SVC_RTC_SetDate(s_set_val[SET_FIELD_YEAR],
+                    s_set_val[SET_FIELD_MONTH],
+                    s_set_val[SET_FIELD_DAY]);
+
+    /* 同步主页日期标签(下次跨天检测以新日期为基准) */
+    s_date_day_shown = s_set_val[SET_FIELD_DAY];
+    snprintf(buf, sizeof(buf), "20%02d - %d - %d",
+             (int)s_set_val[SET_FIELD_YEAR],
+             (int)s_set_val[SET_FIELD_MONTH],
+             (int)s_set_val[SET_FIELD_DAY]);
+    lv_label_set_text(ui.label_date, buf);
+
+    /* 按钮文本短暂标记成功(重新进入页面时恢复) */
+    lv_label_set_text(lv_obj_get_child(s_set_btn_save, 0), "saved");
+}
+
+/* 单行: [字段名] [-] [数值] [+] */
+static lv_obj_t *create_set_row(lv_obj_t *parent, const char *name, int field)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_t *btn;
+    lv_obj_t *label;
+
+    style_container_transparent(row);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_size(row, 220, 55);
+
+    label = lv_label_create(row);
+    lv_label_set_text(label, name);
+    lv_obj_set_style_text_color(label, UI_TEXT_MENU, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+
+    btn = lv_btn_create(row);
+    lv_obj_set_size(btn, 55, 50);
+    label = lv_label_create(btn);
+    lv_label_set_text(label, "-");
+    lv_obj_center(label);
+    lv_obj_add_event_cb(btn, set_btn_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)(field * 2));
+
+    s_set_label_val[field] = lv_label_create(row);
+    lv_obj_set_style_text_color(s_set_label_val[field], UI_TEXT_MENU, 0);
+    lv_obj_set_style_text_font(s_set_label_val[field],
+                               &lv_font_montserrat_24, 0);
+
+    btn = lv_btn_create(row);
+    lv_obj_set_size(btn, 55, 50);
+    label = lv_label_create(btn);
+    lv_label_set_text(label, "+");
+    lv_obj_center(label);
+    lv_obj_add_event_cb(btn, set_btn_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)(field * 2 + 1));
+
+    return row;
+}
+
+/* setting页构建(去图标, 日期设置界面) */
+static void create_setting_page(int idx)
 {
     app_detail_t *app = &s_app[idx];
     lv_obj_t *page = lv_obj_create(NULL);
+    lv_obj_t *container;
+    lv_obj_t *label;
+
+    app->page = page;
+    lv_obj_set_size(page, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_scrollbar_mode(page, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_style_bg_color(page, UI_BG_MENU, 0);
+    lv_obj_add_event_cb(page, detail_page_event_cb, LV_EVENT_GESTURE, NULL);
+
+    container = lv_obj_create(page);
+    style_container_transparent(container);
+    lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(container, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_size(container, UI_SCREEN_W, UI_SCREEN_H);
+    /* 手势回调挂在全屏容器上(LVGL8手势发给实际按下对象, 不冒泡) */
+    lv_obj_add_event_cb(container, detail_page_event_cb,
+                        LV_EVENT_GESTURE, NULL);
+
+    /* 标题 */
+    label = lv_label_create(container);
+    lv_label_set_text(label, "date setting");
+    lv_obj_set_style_text_color(label, UI_TEXT_MENU, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+
+    /* 年/月/日编辑行 */
+    create_set_row(container, "year",  SET_FIELD_YEAR);
+    create_set_row(container, "month", SET_FIELD_MONTH);
+    create_set_row(container, "day",   SET_FIELD_DAY);
+
+    /* 保存按钮 */
+    s_set_btn_save = lv_btn_create(container);
+    lv_obj_set_size(s_set_btn_save, 160, 50);
+    label = lv_label_create(s_set_btn_save);
+    lv_label_set_text(label, "save");
+    lv_obj_center(label);
+    lv_obj_add_event_cb(s_set_btn_save, set_save_btn_event_cb,
+                        LV_EVENT_CLICKED, NULL);
+
+    /* 从RTC加载当前日期 */
+    SVC_RTC_GetDate(&s_set_val[SET_FIELD_YEAR], &s_set_val[SET_FIELD_MONTH],
+                    &s_set_val[SET_FIELD_DAY]);
+    set_label_refresh();
+}
+
+/* setting页进入刷新: 重新加载RTC当前日期, 恢复按钮文本 */
+static void setting_page_enter(void)
+{
+    SVC_RTC_GetDate(&s_set_val[SET_FIELD_YEAR], &s_set_val[SET_FIELD_MONTH],
+                    &s_set_val[SET_FIELD_DAY]);
+    set_label_refresh();
+    lv_label_set_text(lv_obj_get_child(s_set_btn_save, 0), "save");
+}
+
+/* ==================== time详情页(时间设置+闹钟, 懒创建) ====================
+ * 结构: 全屏flex列居中
+ *   [当前时间 时:分:秒(每秒自动刷新)]
+ *   [时编辑行][-值+] / [分编辑行][-值+] / [秒编辑行][-值+]
+ *   [闹钟开关 switch]
+ *   [alarm: 设为闹钟] [set: 设为手表时间]
+ * 无图标; 编辑值默认取RTC当前时间, alarm把编辑值写入闹钟,
+ * set把编辑值写入RTC走时 */
+
+/* 时间编辑状态与控件句柄 */
+enum { TIME_FIELD_H = 0, TIME_FIELD_M, TIME_FIELD_S, TIME_FIELD_NUM };
+static uint8_t   s_time_val[TIME_FIELD_NUM];       /* 时/分/秒编辑值 */
+static lv_obj_t *s_time_label_val[TIME_FIELD_NUM]; /* 数值标签 */
+static lv_obj_t *s_time_switch;                    /* 闹钟开关 */
+static uint8_t   s_alarm_on = 0;                   /* 闹钟开关状态 */
+
+static void time_label_refresh(void)
+{
+    char buf[8];
+
+    snprintf(buf, sizeof(buf), "%02d", (int)s_time_val[TIME_FIELD_H]);
+    lv_label_set_text(s_time_label_val[TIME_FIELD_H], buf);
+    snprintf(buf, sizeof(buf), "%02d", (int)s_time_val[TIME_FIELD_M]);
+    lv_label_set_text(s_time_label_val[TIME_FIELD_M], buf);
+    snprintf(buf, sizeof(buf), "%02d", (int)s_time_val[TIME_FIELD_S]);
+    lv_label_set_text(s_time_label_val[TIME_FIELD_S], buf);
+}
+
+/* 时/分/秒调整并夹取范围 */
+static void time_adjust(int field, int delta)
+{
+    static const uint8_t maxv[TIME_FIELD_NUM] = {23, 59, 59};
+    int v = s_time_val[field] + delta;
+
+    if (v < 0) v = 0;
+    if (v > maxv[field]) v = maxv[field];
+    s_time_val[field] = (uint8_t)v;
+    time_label_refresh();
+}
+
+static void time_btn_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED)
+    {
+        int code = (int)(intptr_t)lv_event_get_user_data(e);
+
+        time_adjust(code >> 1, (code & 1) ? 1 : -1);
+    }
+}
+
+/* 闹钟开关: 切换并立即生效(关=停铃) */
+static void time_switch_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED)
+    {
+        s_alarm_on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+        SVC_RTC_AlarmEnable(s_alarm_on);
+    }
+}
+
+/* alarm按钮: 编辑值 -> 闹钟, 并自动打开开关 */
+static void time_alarm_btn_event_cb(lv_event_t *e)
+{
+    char buf[24];
+
+    (void)e;
+    SVC_RTC_SetAlarm(s_time_val[TIME_FIELD_H], s_time_val[TIME_FIELD_M]);
+    s_alarm_on = 1;
+    lv_obj_add_state(s_time_switch, LV_STATE_CHECKED);
+    snprintf(buf, sizeof(buf), "alarm %02d:%02d",
+             (int)s_time_val[TIME_FIELD_H], (int)s_time_val[TIME_FIELD_M]);
+    printf("UI: %s set\r\n", buf);
+}
+
+/* set按钮: 编辑值 -> RTC走时时间 */
+static void time_set_btn_event_cb(lv_event_t *e)
+{
+    (void)e;
+    SVC_RTC_SetTime(s_time_val[TIME_FIELD_H], s_time_val[TIME_FIELD_M],
+                    s_time_val[TIME_FIELD_S]);
+    printf("UI: time set %02d:%02d:%02d\r\n",
+           (int)s_time_val[TIME_FIELD_H], (int)s_time_val[TIME_FIELD_M],
+           (int)s_time_val[TIME_FIELD_S]);
+}
+
+/* 单行: [字段名] [-] [数值] [+] */
+static lv_obj_t *create_time_row(lv_obj_t *parent, const char *name, int field)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_t *btn;
+    lv_obj_t *label;
+
+    style_container_transparent(row);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_size(row, 220, 45);
+
+    label = lv_label_create(row);
+    lv_label_set_text(label, name);
+    lv_obj_set_style_text_color(label, UI_TEXT_MENU, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+
+    btn = lv_btn_create(row);
+    lv_obj_set_size(btn, 50, 40);
+    label = lv_label_create(btn);
+    lv_label_set_text(label, "-");
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    lv_obj_center(label);
+    lv_obj_add_event_cb(btn, time_btn_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)(field * 2));
+
+    s_time_label_val[field] = lv_label_create(row);
+    lv_obj_set_style_text_color(s_time_label_val[field], UI_TEXT_MENU, 0);
+    lv_obj_set_style_text_font(s_time_label_val[field],
+                               &lv_font_montserrat_16, 0);
+
+    btn = lv_btn_create(row);
+    lv_obj_set_size(btn, 50, 40);
+    label = lv_label_create(btn);
+    lv_label_set_text(label, "+");
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    lv_obj_center(label);
+    lv_obj_add_event_cb(btn, time_btn_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)(field * 2 + 1));
+
+    return row;
+}
+
+/* time页构建(去图标, 时间设置+闹钟开关) */
+static void create_time_page(int idx)
+{
+    app_detail_t *app = &s_app[idx];
+    lv_obj_t *page = lv_obj_create(NULL);
+    lv_obj_t *container;
+    lv_obj_t *label;
+    lv_obj_t *btn;
+    lv_obj_t *row;
+
+    app->page = page;
+    lv_obj_set_size(page, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_scrollbar_mode(page, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_style_bg_color(page, UI_BG_MENU, 0);
+    lv_obj_add_event_cb(page, detail_page_event_cb, LV_EVENT_GESTURE, NULL);
+
+    container = lv_obj_create(page);
+    style_container_transparent(container);
+    lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(container, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_size(container, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_style_pad_row(container, 4, 0);
+    /* 手势回调挂在全屏容器上(LVGL8手势发给实际按下对象, 不冒泡) */
+    lv_obj_add_event_cb(container, detail_page_event_cb,
+                        LV_EVENT_GESTURE, NULL);
+
+    /* 当前时间(每秒由时钟定时器刷新, label_value复用作刷新句柄) */
+    app->label_value = lv_label_create(container);
+    {
+        uint8_t h, m, s;
+        char buf[20];
+
+        SVC_RTC_GetTime(&h, &m, &s);
+        snprintf(buf, sizeof(buf), "%02d : %02d : %02d",
+                 (int)h, (int)m, (int)s);
+        lv_label_set_text(app->label_value, buf);
+    }
+    lv_obj_set_style_text_color(app->label_value, UI_TEXT_MENU, 0);
+    lv_obj_set_style_text_font(app->label_value, &lv_font_montserrat_16, 0);
+
+    /* 时/分/秒编辑行 */
+    create_time_row(container, "hour",   TIME_FIELD_H);
+    create_time_row(container, "min",    TIME_FIELD_M);
+    create_time_row(container, "sec",    TIME_FIELD_S);
+
+    /* 闹钟开关行: [alarm] [switch] */
+    row = lv_obj_create(container);
+    style_container_transparent(row);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_size(row, 220, 40);
+
+    label = lv_label_create(row);
+    lv_label_set_text(label, "alarm");
+    lv_obj_set_style_text_color(label, UI_TEXT_MENU, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+
+    s_time_switch = lv_switch_create(row);
+    lv_obj_set_size(s_time_switch, 60, 30);
+    if (s_alarm_on)
+        lv_obj_add_state(s_time_switch, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(s_time_switch, time_switch_event_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    /* 底部两个按钮行: [alarm设置] [set时间] */
+    row = lv_obj_create(container);
+    style_container_transparent(row);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_size(row, 220, 45);
+    lv_obj_set_style_pad_column(row, 12, 0);
+
+    btn = lv_btn_create(row);
+    lv_obj_set_size(btn, 100, 40);
+    label = lv_label_create(btn);
+    lv_label_set_text(label, "alarm");
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    lv_obj_center(label);
+    lv_obj_add_event_cb(btn, time_alarm_btn_event_cb,
+                        LV_EVENT_CLICKED, NULL);
+
+    btn = lv_btn_create(row);
+    lv_obj_set_size(btn, 100, 40);
+    label = lv_label_create(btn);
+    lv_label_set_text(label, "set");
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    lv_obj_center(label);
+    lv_obj_add_event_cb(btn, time_set_btn_event_cb,
+                        LV_EVENT_CLICKED, NULL);
+
+    /* 编辑初值取RTC当前时间 */
+    SVC_RTC_GetTime(&s_time_val[TIME_FIELD_H], &s_time_val[TIME_FIELD_M],
+                    &s_time_val[TIME_FIELD_S]);
+    time_label_refresh();
+
+    /* 开关状态同步RTC真实使能位(重启后保持一致) */
+    s_alarm_on = SVC_RTC_AlarmIsEnabled();
+    if (s_alarm_on)
+        lv_obj_add_state(s_time_switch, LV_STATE_CHECKED);
+    else
+        lv_obj_clear_state(s_time_switch, LV_STATE_CHECKED);
+}
+
+/* time页进入刷新: 重新加载RTC当前时间到编辑值 */
+static void time_page_enter(void)
+{
+    SVC_RTC_GetTime(&s_time_val[TIME_FIELD_H], &s_time_val[TIME_FIELD_M],
+                    &s_time_val[TIME_FIELD_S]);
+    time_label_refresh();
+}
+
+/* ==================== 详情页构建(懒创建) ====================
+ * 结构: 全屏flex列居中(100x100图标 + 标题 + 数值), 左滑回菜单
+ * setting页为日期设置界面, time页为时间设置+闹钟界面, 均单独构建 */
+static void create_detail_page(int idx)
+{
+    app_detail_t *app = &s_app[idx];
+    lv_obj_t *page;
+
+    if (idx == APP_SETTING)
+    {
+        create_setting_page(idx);
+        return;
+    }
+    if (idx == APP_TIME)
+    {
+        create_time_page(idx);
+        return;
+    }
+    page = lv_obj_create(NULL);
     app->page = page;
     lv_obj_set_size(page, UI_SCREEN_W, UI_SCREEN_H);
     lv_obj_set_scrollbar_mode(page, LV_SCROLLBAR_MODE_OFF);
@@ -553,15 +1024,109 @@ static void ui_refresh_timer_cb(lv_timer_t *timer)
     }
 }
 
-/* RTC时钟: 每秒读取RTC并刷新时间/日期标签 */
+/* ==================== 闹钟响铃弹窗 ====================
+ * 秒级轮询SVC_RTC_AlarmRinging: 响铃->亮屏+弹窗(挂当前活动屏),
+ * 点击stop或响铃超时(10s)自动停后关弹窗 */
+static lv_obj_t *s_alarm_mask = NULL;     /* 弹窗遮罩(空=未显示) */
+
+/* 停止按钮: 手动停铃(下一秒轮询检测到停铃自动关弹窗) */
+static void alarm_popup_stop_cb(lv_event_t *e)
+{
+    (void)e;
+    SVC_RTC_AlarmStop();
+}
+
+/* 创建闹钟弹窗: 全屏半透明遮罩+中央面板(alarm! + 闹铃时间 + stop) */
+static void alarm_popup_create(void)
+{
+    lv_obj_t *mask = lv_obj_create(lv_scr_act());
+    lv_obj_t *panel, *label, *btn;
+    uint8_t h, m;
+    char buf[20];
+
+    s_alarm_mask = mask;
+
+    /* 遮罩覆盖全屏(拦截误触), 半透明黑 */
+    lv_obj_set_size(mask, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_pos(mask, 0, 0);
+    lv_obj_set_style_bg_color(mask, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(mask, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(mask, 0, 0);
+    lv_obj_set_style_radius(mask, 0, 0);
+    lv_obj_clear_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 中央面板 */
+    panel = lv_obj_create(mask);
+    lv_obj_set_size(panel, 200, 160);
+    lv_obj_center(panel);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_radius(panel, 12, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    label = lv_label_create(panel);
+    lv_label_set_text(label, "alarm!");
+    lv_obj_set_style_text_color(label, lv_color_hex(0xE53935), 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+
+    label = lv_label_create(panel);
+    SVC_RTC_GetAlarm(&h, &m);
+    snprintf(buf, sizeof(buf), "%02d : %02d", (int)h, (int)m);
+    lv_label_set_text(label, buf);
+    lv_obj_set_style_text_color(label, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+
+    btn = lv_btn_create(panel);
+    lv_obj_set_size(btn, 120, 45);
+    label = lv_label_create(btn);
+    lv_label_set_text(label, "stop");
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    lv_obj_center(label);
+    lv_obj_add_event_cb(btn, alarm_popup_stop_cb, LV_EVENT_CLICKED, NULL);
+}
+
+/* 关闭闹钟弹窗(响铃结束后由时钟定时器调用) */
+static void alarm_popup_close(void)
+{
+    if (s_alarm_mask != NULL)
+    {
+        lv_obj_del(s_alarm_mask);
+        s_alarm_mask = NULL;
+    }
+}
+
+/* RTC时钟: 每秒读取RTC并刷新时间/日期标签;
+ * 借此秒级定时器驱动闹铃超时管理(响10秒自动停) */
 static void ui_clock_timer_cb(lv_timer_t *timer)
 {
     char buf[20];
     uint8_t h, m, s;
+    static uint8_t s_alarm_shown = 0;    /* 弹窗当前是否显示 */
 
     (void)timer;
 
-    Rtc_GetTime(&h, &m, &s);
+    SVC_RTC_AlarmTick();
+    SVC_RTC_GetTime(&h, &m, &s);
+
+    /* 闹钟响铃检测: 开始->亮屏+弹窗; 结束(停/超时)->关弹窗 */
+    {
+        uint8_t ringing = SVC_RTC_AlarmRinging();
+
+        if (ringing && !s_alarm_shown)
+        {
+            s_alarm_shown = 1;
+            APP_Task_ForceScreenOn();   /* 熄屏状态下也亮屏显示 */
+            alarm_popup_create();
+            printf("UI: alarm ringing\r\n");
+        }
+        else if (!ringing && s_alarm_shown)
+        {
+            s_alarm_shown = 0;
+            alarm_popup_close();
+        }
+    }
 
     snprintf(buf, sizeof(buf), "%02d : %02d : %02d",
              (int)h, (int)m, (int)s);
@@ -569,14 +1134,15 @@ static void ui_clock_timer_cb(lv_timer_t *timer)
 
     if (s_app[APP_TIME].label_value != NULL)
     {
-        snprintf(buf, sizeof(buf), "%02d:%02d", (int)h, (int)m);
+        snprintf(buf, sizeof(buf), "%02d : %02d : %02d",
+                 (int)h, (int)m, (int)s);
         lv_label_set_text(s_app[APP_TIME].label_value, buf);
     }
 
     /* 日期变更(跨天)时刷新日期标签 */
     {
         uint8_t year, month, day;
-        Rtc_GetDate(&year, &month, &day);
+        SVC_RTC_GetDate(&year, &month, &day);
         if (day != s_date_day_shown)
         {
             s_date_day_shown = day;

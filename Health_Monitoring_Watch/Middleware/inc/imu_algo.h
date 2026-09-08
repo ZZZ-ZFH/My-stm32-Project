@@ -31,6 +31,7 @@ typedef struct
 void IMU_Alg_Reset(void);                                  /* 清零姿态与步数 */
 void IMU_Alg_Update(const imu_data_t *data, float dt);     /* 更新一次, dt=采样周期秒 */
 void IMU_Alg_GetResult(imu_result_t *result);              /* 获取当前结果 */
+void IMU_Alg_SetSteps(uint32_t steps);                      /* 设置步数初值(掉电恢复用) */
 
 /* -------------------- 硬件桥接接口(依赖HAL) -------------------- */
 /* 初始化传感器(HAL桥接, 内部调用ICM20602_Init), 返回1=成功 */
